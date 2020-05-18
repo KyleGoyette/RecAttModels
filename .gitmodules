@@ -1,0 +1,3 @@
+[submodule "models/expRNN"]
+	path = models/expRNN
+	url = https://github.com/Lezcano/expRNN.git
