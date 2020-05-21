@@ -37,4 +37,18 @@ def generate_denoise_batch(delay, n_labels, seq_length, batch_size):
     return x, y
 
 
-def generate_add_batch()
+def normal(tensor, mean=0, std=1):
+    """Fills the input Tensor or Variable with values drawn from a normal distribution with the given mean and std
+    Args:
+        tensor: a n-dimension torch.Tensor
+        mean: the mean of the normal distribution
+        std: the standard deviation of the normal distribution
+    Examples:
+        >>> w = torch.Tensor(3, 5)
+        >>> nninit.normal(w)
+    """
+    if isinstance(tensor, Variable):
+        normal(tensor.data, mean=mean, std=std)
+        return tensor
+    else:
+        return tensor.normal_(mean, std)

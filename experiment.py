@@ -1,18 +1,19 @@
 from common import (load_state,
                     load_histories,
                     create_exp_dir)
-from models.models import CopyModel, MemRNN
+from models.models import RecurrentCopyModel, MemRNN
+from models.NMTModels import RNNDecoder, RNNEncoder, Seq2Seq
+#from models.SAB import self_LSTM_sparse_attn
 from models.expRNN.orthogonal import OrthogonalRNN
 from models.expRNN.initialization import henaff_init_
 from models.expRNN.trivializations import expm
 from models.expRNN.parametrization import get_parameters
+from torch.nn import Transformer
 
 from natsort import natsorted
 import os
 import torch
 import torch.nn as nn
-
-
 
 class Experiment(object):
 
@@ -30,13 +31,13 @@ class Experiment(object):
                                      if fn.endswith('.pt')])
 
         model = self._get_model(args)
-        if args.model != 'ORNN':
+        if args.model not in ['ORNN']:
             optimizer = self._get_optimizer(args, model.parameters())
         else:
             non_orth_parameters, log_orth_parameters = get_parameters(model)
             normal_opt = self._get_optimizer(args, non_orth_parameters)
             orth_opt = self._get_optimizer(args,log_orth_parameters,orth=True)
-        optimizer = (normal_opt, orth_opt)
+            optimizer = (normal_opt, orth_opt)
         scheduler = self._get_scheduler(args, optimizer)
 
         # if path exists and some model has been saved in it, Load experiment
@@ -120,13 +121,24 @@ class Experiment(object):
             base = MemRNN(input_size=args.input_size,
                           hidden_size=args.nhid,
                           nonlinearity=args.nonlin)
+        elif model_name == 'Trans':
+            base = Transformer(d_model=args.input_size,
+                                nhead=args.nhead,
+                                num_encoder_layers=args.nenc,
+                                num_decoder_layers=args.ndec,
+                                dim_feedforward=args.nhid,
+                                dropout=0)
         else:
             raise ValueError('Model {} not supported.'.format(model_name))
 
-        if args.task == 'copy':
-            model = CopyModel(base, args.nhid, args.onehot, args.n_labels)
-        elif args.task == 'denoise':
-            model = CopyModel(base, args.nhid, args.onehot, args.n_labels)
+        if args.task == 'copy' or args.task == 'denoise':
+            if model_name == 'Trans':
+                model = base
+            else:
+                model = RecurrentCopyModel(base,
+                                           args.nhid,
+                                           args.onehot,
+                                           args.n_labels)
         else:
             raise ValueError('Task {} not supported.'.format(args.task))
         return model
@@ -138,3 +150,25 @@ class Experiment(object):
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                                **kwargs)
         return scheduler
+
+class NMTExperiment(Experiment):
+    def _get_model(self, args):
+        model_name = args.model
+        if model_name == 'RNN':
+            encoder = RNNEncoder(inp_size=args.inp_size,
+                                 emb_size=args.demb,
+                                 hidden_size=args.nhid,
+                                 n_layers=args.nenc,
+                                 dropout=args.dropout)
+
+            decoder = RNNDecoder(out_size=args.out_size,
+                                 emb_size=args.demb,
+                                 hidden_size=args.nhid,
+                                 n_layers=args.ndec,
+                                 dropout=args.dropout)
+
+            model = Seq2Seq(encoder=encoder, decoder=decoder)
+        else:
+            raise ValueError('Model {} not supported.'.format(model_name))
+
+        return model

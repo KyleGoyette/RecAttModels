@@ -6,7 +6,7 @@ from natsort import natsorted
 
 import torch.nn as nn
 import torch.nn.functional as F
-
+import numpy as np
 
 def load_state(path, model, optimizer=None, scheduler=None, best=False):
     '''
@@ -108,3 +108,44 @@ def construct_heatmap_data(alphas):
     T = len(alphas)
 
     return torch.stack([torch.cat((a[:, 0].clone().detach(), a.new_zeros(T - a.shape[0])),dim=0) for a in alphas], dim=0)
+
+
+def train_nmt(model, iterator, optimizer, criterion, run=None):
+
+    model.train()
+    losses = []
+    for i, batch in enumerate(iterator):
+        src = batch.src
+        trg = batch.trg
+        optimizer.zero_grad()
+        output = model(src, trg)
+        output = output[1:].view(-1, output.shape[-1])
+        trg = trg[1:].view(-1)
+        loss = criterion(output, trg)
+        loss.backward()
+        optimizer.step()
+        if run is not None:
+            run.log({'train loss': loss.item()})
+        losses.append(loss.item())
+    run.log({'epoch train loss': np.mean(losses)})
+    return np.mean(losses)
+
+
+def eval_nmt(model, iterator, criterion, run=None):
+
+    model.eval()
+    losses = []
+    with torch.no_grad():
+        for i, batch in enumerate(iterator):
+            src = batch.src
+            trg = batch.trg
+            output = model(src, trg)
+            output = output[1:].view(-1, output.shape[-1])
+            trg = trg[1:].view(-1)
+            loss = criterion(output, trg)
+            if run is not None:
+                run.log({'valid loss': loss.item()})
+            losses.append(loss.item())
+    run.log({'epoch valid loss': np.mean(losses)})
+    return np.mean(losses)
+
