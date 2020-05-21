@@ -1,7 +1,10 @@
 import torch
 import torch.nn as nn
-from common import modrelu
+import torch.nn.functional as F
 import random
+
+from common import modrelu
+
 
 class RNNEncoder(nn.Module):
     def __init__(self, inp_size, emb_size, hidden_size, n_layers, dropout):
@@ -97,69 +100,145 @@ class Seq2Seq(nn.Module):
         return outputs
 
 
+class BidirectionalEncoder(nn.Module):
+    def __init__(self, inp_size, emb_size, enc_hid_size, dec_hid_size, dropout):
+        super(BidirectionalEncoder, self).__init__()
+        self.embedding = nn.Embedding(inp_size, emb_size)
+        self.rnn = nn.RNN(emb_size, enc_hid_size, bidirectional=True)
+        self.fc = nn.Linear(2*enc_hid_size, dec_hid_size)
+        self.dropout = nn.Dropout(dropout)
 
-class MemRNN(nn.Module):
-    def __init__(self, input_size, hidden_size, nonlinearity, bias=True, cuda=False):
-        super(MemRNN, self).__init__()
-        self.cudafy = cuda
-        self.hidden_size = hidden_size
+    def forward(self, src):
+        embedded = self.dropout(self.embedding(src))
+        outputs, hidden = self.rnn(embedded)
+        # deviation from paper as suggested by https://github.com/bentrevett/pytorch-seq2seq/
+        # use last state for forward, first state for backward
+        hidden = torch.tanh(self.fc(
+            torch.cat((hidden[-2, :, :],
+                       hidden[-1, :, :]), dim=1)
+        ))
 
-        # Add Non linearity
-        if nonlinearity == 'relu':
-            self.nonlinearity = nn.ReLU()
-        if nonlinearity == 'modrelu':
-            self.nonlinearity = modrelu(hidden_size)
-        elif nonlinearity == 'tanh':
-            self.nonlinearity = nn.Tanh()
-        elif nonlinearity == 'sigmoid':
-            self.nonlinearity = nn.Sigmoid()
-        else:
-            self.nonlinearity = None
+        return outputs, hidden
 
-        self.tanh = nn.Tanh()
-        self.softmax = nn.Softmax(dim=0)
-        # Create linear layer to act on input X
-        self.U = nn.Linear(input_size, hidden_size, bias=bias)
-        self.V = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.Ua = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.Va = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.v = nn.Parameter(torch.Tensor(1,hidden_size))
-        nn.init.xavier_normal_(self.v.data)
-        self.es = []
-        self.alphas = []
+class Attention(nn.Module):
+    def __init__(self, enc_hid_size, dec_hid_size):
+        super(Attention, self).__init__()
 
-    def forward(self, x, hidden, reset=False):
-        if hidden is None or reset:
-            if hidden is None:
-                hidden = x.new_zeros(x.shape[0],
-                                     self.hidden_size,
-                                     requires_grad=True)
-            self.memory = []
-            h = self.U(x) + self.V(hidden)
-            self.st = h
-            self.es = []
-            self.alphas = []
+        self.attn = nn.Linear((enc_hid_size * 2) + dec_hid_size, dec_hid_size)
+        self.v = nn.Linear(dec_hid_size, 1, bias=False)
 
-        else:
-            all_hs = torch.stack(self.memory)
-            Uahs = self.Ua(all_hs)
+    def forward(self, hidden, encoder_outputs):
+        # hidden = [batch size, dec hid dim]
+        # encoder_outputs = [src len, batch size, enc hid dim * 2]
+        batch_size = encoder_outputs.shape[1]
+        src_len = encoder_outputs.shape[0]
+        # repeat decoder hidden state src_len times
+        hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)
+        encoder_outputs = encoder_outputs.permute(1, 0, 2)
+        # hidden = [batch size, src len, dec hid dim]
+        # encoder_outputs = [batch size, src len, enc hid dim * 2]
+        energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim=2)))
+        # energy = [batch size, src len, dec hid dim]
+        attention = self.v(energy).squeeze(2)
+        # attention= [batch size, src len]
+        return F.softmax(attention, dim=1)
 
-            es = torch.matmul(self.tanh(self.Va(self.st).expand_as(Uahs) + Uahs), self.v.unsqueeze(2)).squeeze(2)
-            alphas = self.softmax(es)
-            self.alphas.append(alphas)
-            self.es.append(es)
-            all_hs = torch.stack(self.memory, 0)
-            ct = torch.sum(
-                torch.mul(
-                    alphas.unsqueeze(2).expand_as(all_hs),
-                    all_hs),
-                dim=0
-            )
-            self.st = (all_hs[-1] + ct)
-            h = self.U(x) + self.V(self.st)
 
-        if self.nonlinearity:
-            h = self.nonlinearity(h)
-        h.retain_grad()
-        self.memory.append(h)
-        return h
+class BidirectionalDecoder(nn.Module):
+    def __init__(self, out_size, emb_size, enc_hid_size, dec_hid_size, dropout, attention):
+        super(BidirectionalDecoder, self).__init__()
+
+        self.output_dim = out_size
+        self.attention = attention
+
+        self.embedding = nn.Embedding(out_size, emb_size)
+
+        self.rnn = nn.RNN((enc_hid_size * 2) + emb_size, dec_hid_size)
+
+        self.fc_out = nn.Linear((enc_hid_size * 2) + dec_hid_size + emb_size, out_size)
+
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, input, hidden, encoder_outputs):
+        # input = [batch size]
+        # hidden = [batch size, dec hid size]
+        # encoder_outputs = [src len, batch size, enc hid size * 2]
+
+        input = input.unsqueeze(0)
+
+        # input = [1, batch size]
+
+        embedded = self.dropout(self.embedding(input))
+
+        # embedded = [1, batch size, emb size]
+
+        a = self.attention(hidden, encoder_outputs)
+
+        # a = [batch size, src len]
+
+        a = a.unsqueeze(1)
+
+        # a = [batch size, 1, src len]
+
+        encoder_outputs = encoder_outputs.permute(1, 0, 2)
+
+        # encoder_outputs = [batch size, src len, enc hid size * 2]
+
+        weighted = torch.bmm(a, encoder_outputs)
+
+        # weighted = [batch size, 1, enc hid size * 2]
+
+        weighted = weighted.permute(1, 0, 2)
+
+        # weighted = [1, batch size, enc hid size * 2]
+
+        rnn_input = torch.cat((embedded, weighted), dim=2)
+
+        # rnn_input = [1, batch size, (enc hid size * 2) + emb size]
+
+        output, hidden = self.rnn(rnn_input, hidden.unsqueeze(0))
+
+        # output = [seq len, batch size, dec hid size * n directions]
+        # hidden = [n layers * n directions, batch size, dec hid size]
+
+        # seq len, n layers and n directions will always be 1 in this decoder, therefore:
+        # output = [1, batch size, dec hid size]
+        # hidden = [1, batch size, dec hid size]
+        # this also means that output == hidden
+        assert (output == hidden).all()
+
+        embedded = embedded.squeeze(0)
+        output = output.squeeze(0)
+        weighted = weighted.squeeze(0)
+
+        prediction = self.fc_out(torch.cat((output, weighted, embedded), dim=1))
+
+        # prediction = [batch size, output size]
+
+        return prediction, hidden.squeeze(0)
+
+
+class AttnSeq2Seq(nn.Module):
+    def __init__(self, encoder, decoder):
+        super().__init__()
+
+        self.encoder = encoder
+        self.decoder = decoder
+
+    def forward(self, src, trg, teacher_forcing_ratio=0.5):
+        batch_size = src.shape[1]
+        trg_len = trg.shape[0]
+        trg_vocab_size = self.decoder.output_dim
+
+        outputs = torch.zeros(trg_len, batch_size, trg_vocab_size)
+        encoder_outputs, hidden = self.encoder(src)
+        input = trg[0, :]
+
+        for t in range(1, trg_len):
+            output, hidden = self.decoder(input, hidden, encoder_outputs)
+            outputs[t] = output
+            teacher_force = random.random() < teacher_forcing_ratio
+            top1 = output.argmax(1)
+            input = trg[t] if teacher_force else top1
+
+        return outputs

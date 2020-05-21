@@ -2,7 +2,8 @@ from common import (load_state,
                     load_histories,
                     create_exp_dir)
 from models.models import RecurrentCopyModel, MemRNN
-from models.NMTModels import RNNDecoder, RNNEncoder, Seq2Seq
+from models.NMTModels import (RNNDecoder, RNNEncoder, Seq2Seq,
+                              BidirectionalDecoder, BidirectionalEncoder, Attention, AttnSeq2Seq)
 #from models.SAB import self_LSTM_sparse_attn
 from models.expRNN.orthogonal import OrthogonalRNN
 from models.expRNN.initialization import henaff_init_
@@ -151,24 +152,50 @@ class Experiment(object):
                                                                **kwargs)
         return scheduler
 
+
 class NMTExperiment(Experiment):
     def _get_model(self, args):
         model_name = args.model
         if model_name == 'RNN':
             encoder = RNNEncoder(inp_size=args.inp_size,
                                  emb_size=args.demb,
-                                 hidden_size=args.nhid,
+                                 hid_size=args.nhid,
                                  n_layers=args.nenc,
                                  dropout=args.dropout)
 
             decoder = RNNDecoder(out_size=args.out_size,
                                  emb_size=args.demb,
-                                 hidden_size=args.nhid,
+                                 hid_size=args.nhid,
                                  n_layers=args.ndec,
                                  dropout=args.dropout)
 
             model = Seq2Seq(encoder=encoder, decoder=decoder)
+
+        elif model_name == 'MemRNN':
+            encoder = BidirectionalEncoder(inp_size=args.inp_size,
+                                           emb_size=args.demb,
+                                           enc_hid_size=args.nhid,
+                                           dec_hid_size=args.nhid,
+                                           dropout=args.dropout)
+
+
+            attention = Attention(enc_hid_size=args.nhid,
+                                  dec_hid_size=args.nhid)
+
+            decoder = BidirectionalDecoder(out_size=args.out_size,
+                                           emb_size=args.demb,
+                                           enc_hid_size=args.nhid,
+                                           dec_hid_size=args.nhid,
+                                           dropout=args.dropout,
+                                           attention=attention)
+
+            model = AttnSeq2Seq(encoder=encoder,
+                                decoder=decoder)
+
         else:
             raise ValueError('Model {} not supported.'.format(model_name))
 
         return model
+
+
+
