@@ -19,9 +19,9 @@ def create_diag(s, n):
     return A_init.astype(np.float32)
 
 
-class CopyModel(nn.Module):
+class RecurrentCopyModel(nn.Module):
     def __init__(self, rnn, hidden_size, onehot, n_labels):
-        super(CopyModel, self).__init__()
+        super(RecurrentCopyModel, self).__init__()
         self.rnn = rnn
         self.hidden_size = hidden_size
         self.onehot = onehot
@@ -53,6 +53,29 @@ class CopyModel(nn.Module):
             # append to lists for return
             hiddens.append(h)
             outs.append(out)
+        return torch.stack(outs, dim=1), hiddens
+
+class TransformerCopyModel(nn.Module):
+    def __init__(self, rnn, hidden_size, onehot, n_labels):
+        super(RecurrentCopyModel, self).__init__()
+        self.rnn = rnn
+        self.hidden_size = hidden_size
+        self.onehot = onehot
+        self.n_labels = n_labels
+        self.ol = nn.Linear(hidden_size, n_labels+1)
+        nn.init.kaiming_normal_(self.ol.weight.data, nonlinearity="relu")
+
+    def forward(self, input):
+        if self.onehot:
+            inp_onehot = onehot(input, self.n_labels)
+            print(inp_onehot)
+            hidden = self.rnn.forward(inp_onehot)
+        else:
+            hidden = self.rnn.forward(input[i, :].unsqueeze(1).float())
+        # retain grads for plotting
+        out.retain_grad()
+        h.retain_grad()
+        # append to lists for return
         return torch.stack(outs, dim=1), hiddens
 
 

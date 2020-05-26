@@ -3,13 +3,13 @@ from common import (load_state,
                     create_exp_dir)
 from models.models import RecurrentCopyModel, MemRNN
 from models.NMTModels import (RNNDecoder, RNNEncoder, Seq2Seq,
-                              BidirectionalDecoder, BidirectionalEncoder, Attention, AttnSeq2Seq)
+                              BidirectionalDecoder, BidirectionalEncoder, Attention, AttnSeq2Seq,
+                              TransformerEncoder, TransformerDecoder, TransformerSeq2Seq)
 #from models.SAB import self_LSTM_sparse_attn
 from models.expRNN.orthogonal import OrthogonalRNN
 from models.expRNN.initialization import henaff_init_
 from models.expRNN.trivializations import expm
 from models.expRNN.parametrization import get_parameters
-from torch.nn import Transformer
 
 from natsort import natsorted
 import os
@@ -192,10 +192,32 @@ class NMTExperiment(Experiment):
             model = AttnSeq2Seq(encoder=encoder,
                                 decoder=decoder)
 
+        elif model_name == 'Trans':
+            encoder = TransformerEncoder(inp_size=args.inp_size,
+                                         hid_size=args.nhid,
+                                         n_layers=args.nenc,
+                                         n_heads=args.nhenc,
+                                         pf_dim=512,
+                                         dropout=args.dropout,
+                                         max_length=100)
+
+            decoder = TransformerDecoder(output_dim=args.out_size,
+                                         hid_size=args.nhid,
+                                         n_layers=args.ndec,
+                                         n_heads=args.nhdec,
+                                         pf_dim=512,
+                                         dropout=args.dropout,
+                                         max_length=100)
+            model = TransformerSeq2Seq(encoder=encoder,
+                                       decoder=decoder,
+                                       src_pad_idx=args.SRCPADIDX,
+                                       trg_pad_idx=args.TRGPADIDX)
+
         else:
             raise ValueError('Model {} not supported.'.format(model_name))
 
         return model
+
 
 
 

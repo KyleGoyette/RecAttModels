@@ -9,26 +9,34 @@ import spacy
 import wandb
 import revtok
 from experiment import NMTExperiment
-from common import train_nmt, eval_nmt
+from common import train_nmt, eval_nmt, visualize_transformer_attention, convert_sentence_to_tensor, convert_tensor_to_sentence
 from models.NMTModels import Seq2Seq, RNNEncoder, RNNDecoder
 
 parser = argparse.ArgumentParser(description='Neural machine translation')
 # task params
 parser.add_argument('--name', type=str, default=None)
-parser.add_argument('--nepochs', type=int, default=5)
+parser.add_argument('--nepochs', type=int, default=25)
+parser.add_argument('--batch_size', type=int, default=128, help='batch size')
 
 # model params
 parser.add_argument('--model', type=str,
-                    choices=['RNN', 'LSTM', 'ORNN', 'MemRNN'],
+                    choices=['RNN', 'MemRNN', 'Trans'],
                     default='RNN')
-parser.add_argument('--nhid', type=int, default=128,
+parser.add_argument('--nhid', type=int, default=256,
                     help='hidden units')
 parser.add_argument('--nhead', type=int, default=2,
                     help='attention heads')
-parser.add_argument('--nenc', type=int, default=1,
+parser.add_argument('--nenc', type=int, default=3,
                     help='number of encoder layers')
-parser.add_argument('--ndec', type=int, default=1,
+parser.add_argument('--ndec', type=int, default=3,
                     help='number of decoder layers')
+parser.add_argument('--logfreq', type=int, default=500,
+                    help='frequency to log outputs')
+
+parser.add_argument('--nhenc', type=int, default=2,
+                    help='number of encoder attention heads')
+parser.add_argument('--nhdec', type=int, default=2,
+                    help='number of decoder attention heads')
 parser.add_argument('--nonlin', type=str, default='tanh',
                     help='Non linearity, locked to tanh for LSTM')
 parser.add_argument('--demb', type=int, default=1024,
@@ -38,13 +46,12 @@ parser.add_argument('--dropout', type=float, default=0.2,
 #optim params/data params
 parser.add_argument('--opt', type=str, default='RMSProp',
                     choices=['SGD', 'RMSProp', 'Adam'])
-parser.add_argument('--lr', type=float, default=None)
+parser.add_argument('--lr', type=float, default=0.0005)
 parser.add_argument('--lr_orth', type=float, default=None)
 parser.add_argument('--alpha', type=float, default=None)
 parser.add_argument('--betas', type=float, default=None, nargs="+")
 parser.add_argument('--cuda', action='store_true', default=False)
-parser.add_argument('--logfreq', type=int, default=500,
-                    help='frequency to log heatmaps, gradients')
+
 
 
 def run():
@@ -103,7 +110,7 @@ def run():
         Tokenizes German text from a string into a list of strings (tokens) and reverses it
         """
 
-        return [tok.text for tok in spacy_de.tokenizer(text)][::-1]
+        return [tok.text for tok in spacy_de.tokenizer(text)]#[::-1]
 
     def tokenize_en(text):
         """
@@ -111,16 +118,21 @@ def run():
         """
 
         return [tok.text for tok in spacy_en.tokenizer(text)]
-
+    if args.model == 'Trans':
+        batch_first = True
+    else:
+        batch_first = False
     SRC = Field(tokenize_de,
                 init_token='<sos>',
                 eos_token='<eos>',
-                lower=True)
+                lower=True,
+                batch_first=batch_first)
 
     TRG = Field(tokenize_en,
                 init_token='<sos>',
                 eos_token='<eos>',
-                lower=True)
+                lower=True,
+                batch_first=batch_first)
 
     train_data, val_data, test_data = Multi30k.splits(exts=('.de', '.en'),
                                                    fields=(SRC, TRG))
@@ -128,9 +140,11 @@ def run():
     SRC.build_vocab(train_data, min_freq=2)
     TRG.build_vocab(train_data, min_freq=2)
 
+    config.SRCPADIDX = SRC.vocab.stoi[SRC.pad_token]
+    config.TRGPADIDX = TRG.vocab.stoi[TRG.pad_token]
     train_iterator, valid_iterator, test_iterator = BucketIterator.splits(
         (train_data, val_data, test_data),
-        batch_size=16)
+        batch_size=config.batch_size)
     config.inp_size = len(SRC.vocab)
     config.out_size = len(TRG.vocab)
 
@@ -138,14 +152,27 @@ def run():
     experiment = NMTExperiment(config)
     model = experiment.model
     wandb.watch(model)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss(ignore_index=config.TRGPADIDX)
     for i in range(config.nepochs):
-        train_loss = train_nmt(experiment.model, train_iterator, experiment.optimizer, criterion, run)
-        val_loss = eval_nmt(model, valid_iterator, criterion, run)
+        train_loss = train_nmt(experiment.model, train_iterator,
+                               experiment.optimizer, criterion, config, run,
+                               SRC,TRG)
+        val_loss = eval_nmt(model, valid_iterator, criterion, run, config, SRC, TRG)
+
+
+        example_idx = 8
+        src = vars(train_data.examples[example_idx])['src']
+        trg = vars(train_data.examples[example_idx])['trg']
+        src_tensor = convert_sentence_to_tensor(src, SRC)
+        trg_tensor = convert_sentence_to_tensor(trg, TRG)
+        with torch.no_grad():
+            output, attention = model.forward(src_tensor.unsqueeze(0),
+                                              trg_tensor.unsqueeze(0))
+        translation = convert_tensor_to_sentence(torch.argmax(output, dim=-1).squeeze(0),
+                                                 TRG)
+        visualize_transformer_attention(attention, src, translation)
 
         print(f'Epoch: {i} Train Loss: {train_loss} Val Loss {val_loss}')
-
-
 
 
 if __name__ == '__main__':

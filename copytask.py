@@ -28,9 +28,16 @@ parser.add_argument('--onehot', action='store_true',
                     help='onehot inputs and labels')
 # model params
 parser.add_argument('--model', type=str,
-                    choices=['RNN', 'LSTM', 'ORNN', 'MemRNN'], default='RNN')
+                    choices=['RNN', 'LSTM', 'ORNN', 'MemRNN', 'Trans'],
+                    default='RNN')
 parser.add_argument('--nhid', type=int, default=128,
                     help='hidden units')
+parser.add_argument('--nhead', type=int, default=2,
+                    help='attention heads')
+parser.add_argument('--nenc', type=int, default=2,
+                    help='number of encoder layers')
+parser.add_argument('--ndec', type=int, default=2,
+                    help='number of decoder layers')
 parser.add_argument('--nonlin', type=str, default='tanh',
                     help='Non linearity, locked to tanh for LSTM')
 #optim params/data params
@@ -59,6 +66,7 @@ def run():
     if args.name is None:
         run = wandb.init(project="rec-att-project",
                    config=hyper_parameter_defaults)
+        wandb.config["more"] = "custom"
         # save run to get readable run name
         run.save()
         run.name = os.path.join(args.task, run.name)
@@ -69,6 +77,7 @@ def run():
         run = wandb.init(project="rec-att-project",
                    config=hyper_parameter_defaults,
                    name=args.name)
+        wandb.config["more"] = "custom"
         run.name = os.path.join(args.task, run.name)
         config = wandb.config
         config.save_dir = os.path.join('experiments', args.task, args.name)
@@ -150,6 +159,7 @@ def run():
                               yaxis=dict(title=r'$\frac{dL}{dh_t}$'))
 
             wandb.log({'grads': fig})
+            fig.show()
             # log heat maps for attention models
             if config.model in ['MemRNN']:
                 hm = construct_heatmap_data(model.rnn.alphas)
