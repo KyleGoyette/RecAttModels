@@ -3,7 +3,7 @@ import torch.nn as nn
 from common import onehot
 import numpy as np
 from common import modrelu
-from models.expRNN.orthogonal import OrthogonalRNN
+
 
 def henaff_init(n):
     # Initialization of skew-symmetric matrix
@@ -20,9 +20,10 @@ def create_diag(s, n):
 
 
 class RecurrentCopyModel(nn.Module):
-    def __init__(self, rnn, hidden_size, onehot, n_labels):
+    def __init__(self, rnn, hidden_size, onehot, n_labels, device=None):
         super(RecurrentCopyModel, self).__init__()
         self.rnn = rnn
+        self.device = device
         self.hidden_size = hidden_size
         self.onehot = onehot
         self.n_labels = n_labels
@@ -48,41 +49,18 @@ class RecurrentCopyModel(nn.Module):
                 h = hidden
                 out = self.ol(hidden)
             # retain grads for plotting
-            out.retain_grad()
             h.retain_grad()
+            out.retain_grad()
             # append to lists for return
             hiddens.append(h)
             outs.append(out)
         return torch.stack(outs, dim=1), hiddens
 
-class TransformerCopyModel(nn.Module):
-    def __init__(self, rnn, hidden_size, onehot, n_labels):
-        super(RecurrentCopyModel, self).__init__()
-        self.rnn = rnn
-        self.hidden_size = hidden_size
-        self.onehot = onehot
-        self.n_labels = n_labels
-        self.ol = nn.Linear(hidden_size, n_labels+1)
-        nn.init.kaiming_normal_(self.ol.weight.data, nonlinearity="relu")
-
-    def forward(self, input):
-        if self.onehot:
-            inp_onehot = onehot(input, self.n_labels)
-            print(inp_onehot)
-            hidden = self.rnn.forward(inp_onehot)
-        else:
-            hidden = self.rnn.forward(input[i, :].unsqueeze(1).float())
-        # retain grads for plotting
-        out.retain_grad()
-        h.retain_grad()
-        # append to lists for return
-        return torch.stack(outs, dim=1), hiddens
-
 
 class MemRNN(nn.Module):
-    def __init__(self, input_size, hidden_size, nonlinearity, bias=True, cuda=False):
+    def __init__(self, input_size, hidden_size, nonlinearity, bias=True, device=None):
         super(MemRNN, self).__init__()
-        self.cudafy = cuda
+        self.device = device
         self.hidden_size = hidden_size
 
         # Add Non linearity
@@ -99,12 +77,14 @@ class MemRNN(nn.Module):
 
         self.tanh = nn.Tanh()
         self.softmax = nn.Softmax(dim=0)
-        # Create linear layer to act on input X
+        # Create linear layer to act on input X and recurrent weights
         self.U = nn.Linear(input_size, hidden_size, bias=bias)
         self.V = nn.Linear(hidden_size, hidden_size, bias=False)
+        # memory network
         self.Ua = nn.Linear(hidden_size, hidden_size, bias=False)
         self.Va = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.v = nn.Parameter(torch.Tensor(1,hidden_size))
+        self.v = nn.Parameter(torch.Tensor(1, hidden_size, 1))
+
         nn.init.xavier_normal_(self.v.data)
         self.es = []
         self.alphas = []
@@ -115,6 +95,8 @@ class MemRNN(nn.Module):
                 hidden = x.new_zeros(x.shape[0],
                                      self.hidden_size,
                                      requires_grad=True)
+                if self.device is not None:
+                    hidden = hidden.to(self.device)
             self.memory = []
             h = self.U(x) + self.V(hidden)
             self.st = h
@@ -124,11 +106,13 @@ class MemRNN(nn.Module):
         else:
             all_hs = torch.stack(self.memory)
             Uahs = self.Ua(all_hs)
-
-            es = torch.matmul(self.tanh(self.Va(self.st).expand_as(Uahs) + Uahs), self.v.unsqueeze(2)).squeeze(2)
-            alphas = self.softmax(es)
+            energy = torch.matmul(
+                self.tanh(self.Va(self.st).expand_as(Uahs) + Uahs),
+                self.v).squeeze(2)
+            alphas = self.softmax(energy)
+            self.es.append(energy)
             self.alphas.append(alphas)
-            self.es.append(es)
+
             all_hs = torch.stack(self.memory, 0)
             ct = torch.sum(
                 torch.mul(
@@ -141,6 +125,7 @@ class MemRNN(nn.Module):
 
         if self.nonlinearity:
             h = self.nonlinearity(h)
+        # call retain grad to keep the gradient to log later
         h.retain_grad()
         self.memory.append(h)
         return h

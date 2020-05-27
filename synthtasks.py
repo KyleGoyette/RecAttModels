@@ -4,31 +4,33 @@ import wandb
 import argparse
 import time
 import os
-import matplotlib.pyplot as plt
-import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
 from experiment import Experiment
-from common import construct_heatmap_data
+from common import construct_heatmap_data, onehot
 from utils import (generate_denoise_batch,
                    generate_copy_batch)
 
 parser = argparse.ArgumentParser(description='Synthetic task runner')
 # task params
 parser.add_argument('--name', type=str, default=None)
+parser.add_argument('--group', type=str, default=None)
+parser.add_argument('--device', type=int, default=None)
 parser.add_argument('--task', type=str, default='copy',
                     choices=['copy', 'denoise'])
-parser.add_argument('--iters', type=int, default=2000)
+parser.add_argument('--iters', type=int, default=20000)
 parser.add_argument('--T', type=int, default=200, help='Delay')
 parser.add_argument('--n_labels', type=int, default=8, help='Number of labels')
 parser.add_argument('--seq_len', type=int, default=10,
                     help='Length of sequence to copy')
 parser.add_argument('--onehot', action='store_true',
                     help='onehot inputs and labels')
+parser.add_argument('--batch_size', type=int, default=12,
+                    help='batch size')
 # model params
 parser.add_argument('--model', type=str,
-                    choices=['RNN', 'LSTM', 'ORNN', 'MemRNN', 'Trans'],
+                    choices=['RNN', 'LSTM', 'ORNN', 'MemRNN', 'SAB', 'Trans'],
                     default='RNN')
 parser.add_argument('--nhid', type=int, default=128,
                     help='hidden units')
@@ -40,6 +42,8 @@ parser.add_argument('--ndec', type=int, default=2,
                     help='number of decoder layers')
 parser.add_argument('--nonlin', type=str, default='tanh',
                     help='Non linearity, locked to tanh for LSTM')
+parser.add_argument('--nlayers', type=int, default=1,
+                    help='Number of SAB layers')
 #optim params/data params
 parser.add_argument('--opt', type=str, default='RMSProp',
                     choices=['SGD', 'RMSProp', 'Adam'])
@@ -48,12 +52,22 @@ parser.add_argument('--lr_orth', type=float, default=None)
 parser.add_argument('--alpha', type=float, default=None)
 parser.add_argument('--betas', type=float, default=None, nargs="+")
 parser.add_argument('--cuda', action='store_true', default=False)
-parser.add_argument('--logfreq', type=int, default=500,
+parser.add_argument('--logfreq', type=int, default=50,
                     help='frequency to log heatmaps, gradients')
+parser.add_argument('--loghmvid', action='store_true', default=False,
+                    help='log heatmaps as a video')
+
+parser.add_argument('--loggrads', type=int, default=500,
+                    help='frequency to log grads')
 
 def run():
     # set up hyperparameters for sweeps
     args = parser.parse_args()
+    if args.device is not None:
+        args.device = torch.device(f'cuda:{args.device}')
+    if args.group is None:
+        args.group = 'main'
+
     hyper_parameter_defaults = dict(
         opt='RMSProp',
         nonlin='relu',
@@ -62,10 +76,12 @@ def run():
         betas=(0.5, 0.999),
         alpha=0.9
     )
+
     # create save_dir using wandb name
     if args.name is None:
         run = wandb.init(project="rec-att-project",
-                   config=hyper_parameter_defaults)
+                         config=hyper_parameter_defaults,
+                         group=args.group)
         wandb.config["more"] = "custom"
         # save run to get readable run name
         run.save()
@@ -75,8 +91,9 @@ def run():
         run.save()
     else:
         run = wandb.init(project="rec-att-project",
-                   config=hyper_parameter_defaults,
-                   name=args.name)
+                         config=hyper_parameter_defaults,
+                         name=args.name,
+                         group=args.group)
         wandb.config["more"] = "custom"
         run.name = os.path.join(args.task, run.name)
         config = wandb.config
@@ -114,6 +131,7 @@ def run():
                                            n_labels=config.n_labels,
                                            seq_length=config.seq_len,
                                            batch_size=1)
+    hms = []
     for i in range(config.iters):
         s_t = time.time()
         x, y = batch_generator(delay=config.T,
@@ -121,17 +139,14 @@ def run():
                                    seq_length=config.seq_len,
                                    batch_size=config.batch_size)
 
-        x = x.transpose(1, 0)
         model.zero_grad()
-        outs, hiddens = model.forward(x)
-        if i % config.logfreq == 0:
-            model.zero_grad()
-
-            labels_loss = loss_crit(outs[-config.seq_len:, :].transpose(2, 1),
-                                    y[-config.seq_len:, :])
-            labels_loss.backward(retain_graph=True)
-            wandb.log({'label loss': labels_loss})
-        model.zero_grad()
+        if config.model in ['SAB']:
+            if config.onehot:
+                x = onehot(x, config.n_labels)
+            outs = model.forward(x)
+        else:
+            x = x.transpose(1, 0)
+            outs, hiddens = model.forward(x)
         all_loss = loss_crit(outs.transpose(2, 1), y)
         all_loss.backward()
         losses.append(all_loss.item())
@@ -146,31 +161,44 @@ def run():
 
         if i % config.logfreq == 0:
             model.zero_grad()
-            outs, hiddens = model.forward(x_const.transpose(1, 0))
+            if config.model in ['SAB']:
+                if config.onehot:
+                    x_const_onehot = onehot(x_const, config.n_labels)
+                outs = model.forward(x_const_onehot)
+            else:
+                outs, hiddens = model.forward(x_const.transpose(1, 0))
+
             labels_loss = loss_crit(outs[-config.seq_len:, :].transpose(2, 1),
                                     y_const[-config.seq_len:, :])
             labels_loss.backward(retain_graph=True)
+            wandb.log({'label loss': labels_loss})
 
-            grads = [h.grad.data.norm(2) for h in hiddens]
+            grads = [h.grad.data.norm(2).clone() for h in hiddens]
             fig = go.Figure(data=go.Scatter(x=list(range(len(grads))),
                                             y=grads))
             fig.update_layout(title='Gradient flow (update={})'.format(i),
                               xaxis=dict(title='t'),
-                              yaxis=dict(title=r'$\frac{dL}{dh_t}$'))
+                              yaxis=dict(title='$\\frac{dL}{dh_t}$'))
 
-            wandb.log({'grads': fig})
-            fig.show()
+
             # log heat maps for attention models
             if config.model in ['MemRNN']:
                 hm = construct_heatmap_data(model.rnn.alphas)
-                wandb.log({'heat map': px.imshow(hm)})
+                if not config.loghmvid:
+                    wandb.log({'heat map': px.imshow(hm, showscale=False)})
+                else:
+                    hms.append(hm)
+            if i % config.loggrads == 0:
+                wandb.log({'grads': fig})
 
         print('Update {}, Time for Update: {} , Average Loss: {}, Accuracy: {}'
               .format(i + 1, time.time() - s_t, all_loss.item(), acc))
 
         wandb.log({"loss": all_loss})
         wandb.log({"accuracy": acc})
-
+    if config.model in ['MemRNN'] and config.loghmvid:
+        hms_vid = 255*torch.stack(hms, dim=0).unsqueeze(1).detach().cpu().numpy()
+        wandb.log({"video": wandb.Video(hms_vid, fps=4, format="gif")})
 
 
 if __name__ == '__main__':

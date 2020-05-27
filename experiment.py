@@ -5,7 +5,7 @@ from models.models import RecurrentCopyModel, MemRNN
 from models.NMTModels import (RNNDecoder, RNNEncoder, Seq2Seq,
                               BidirectionalDecoder, BidirectionalEncoder, Attention, AttnSeq2Seq,
                               TransformerEncoder, TransformerDecoder, TransformerSeq2Seq)
-#from models.SAB import self_LSTM_sparse_attn
+from models.SAB import SAB_LSTM
 from models.expRNN.orthogonal import OrthogonalRNN
 from models.expRNN.initialization import henaff_init_
 from models.expRNN.trivializations import expm
@@ -62,6 +62,8 @@ class Experiment(object):
 
         self.args = args
         self.model = model
+        if args.device is not None:
+            self.model = self.model.to(args.device)
         self.optimizer = optimizer
         self.scheduler = scheduler
         if args.cuda:
@@ -121,7 +123,17 @@ class Experiment(object):
         elif model_name == 'MemRNN':
             base = MemRNN(input_size=args.input_size,
                           hidden_size=args.nhid,
-                          nonlinearity=args.nonlin)
+                          nonlinearity=args.nonlin,
+                          device=args.device)
+        elif model_name == 'SAB':
+            model = SAB_LSTM(input_size=args.input_size,
+                             hidden_size=args.nhid,
+                             num_layers=args.nlayers,
+                             num_classes=args.n_labels+1,
+                             truncate_length=100,
+                             attn_every_k=5,
+                             top_k=5)
+            return model
         elif model_name == 'Trans':
             base = Transformer(d_model=args.input_size,
                                 nhead=args.nhead,
@@ -139,7 +151,8 @@ class Experiment(object):
                 model = RecurrentCopyModel(base,
                                            args.nhid,
                                            args.onehot,
-                                           args.n_labels)
+                                           args.n_labels,
+                                           device=args.device)
         else:
             raise ValueError('Task {} not supported.'.format(args.task))
         return model
