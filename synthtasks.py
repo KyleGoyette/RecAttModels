@@ -131,6 +131,9 @@ def run():
                                            n_labels=config.n_labels,
                                            seq_length=config.seq_len,
                                            batch_size=1)
+    if config.device is not None:
+        x_const = x_const.to(config.device)
+        y_const = y_const.to(config.device)
     hms = []
     for i in range(config.iters):
         s_t = time.time()
@@ -138,6 +141,10 @@ def run():
                                    n_labels=config.n_labels,
                                    seq_length=config.seq_len,
                                    batch_size=config.batch_size)
+
+        if config.device is not None:
+            x = x.to(config.device)
+            y = y.to(config.device)
 
         model.zero_grad()
         if config.model in ['SAB']:
