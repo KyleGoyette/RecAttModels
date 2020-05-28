@@ -3,6 +3,7 @@ import torch.nn as nn
 from common import onehot
 import numpy as np
 from common import modrelu
+from models.expRNN.expm32 import expm32
 
 
 def henaff_init(n):
@@ -83,9 +84,13 @@ class MemRNN(nn.Module):
         # memory network
         self.Ua = nn.Linear(hidden_size, hidden_size, bias=False)
         self.Va = nn.Linear(hidden_size, hidden_size, bias=False)
-        self.v = nn.Parameter(torch.Tensor(1, hidden_size, 1))
+        self.v = nn.Parameter(torch.Tensor(1, hidden_size))
 
         nn.init.xavier_normal_(self.v.data)
+        self.V.weight.data = torch.as_tensor(henaff_init(hidden_size))
+        A = self.V.weight.data.triu(diagonal=1)
+        A = A - A.t()
+        self.V.weight.data = expm32(A)
         self.es = []
         self.alphas = []
 
@@ -108,7 +113,7 @@ class MemRNN(nn.Module):
             Uahs = self.Ua(all_hs)
             energy = torch.matmul(
                 self.tanh(self.Va(self.st).expand_as(Uahs) + Uahs),
-                self.v).squeeze(2)
+                self.v.unsqueeze(2)).squeeze(2)
             alphas = self.softmax(energy)
             self.es.append(energy)
             self.alphas.append(alphas)
@@ -120,7 +125,7 @@ class MemRNN(nn.Module):
                     all_hs),
                 dim=0
             )
-            self.st = (all_hs[-1] + ct)
+            self.st = all_hs[-1] + ct
             h = self.U(x) + self.V(self.st)
 
         if self.nonlinearity:

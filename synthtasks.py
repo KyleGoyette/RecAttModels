@@ -52,6 +52,8 @@ parser.add_argument('--lr_orth', type=float, default=None)
 parser.add_argument('--alpha', type=float, default=None)
 parser.add_argument('--betas', type=float, default=None, nargs="+")
 parser.add_argument('--cuda', action='store_true', default=False)
+parser.add_argument('--clip', type=float, default=1.0,
+                    help='gradient clipping norm value')
 
 #SAB
 parser.add_argument('--attk', type=int, default=2,
@@ -169,8 +171,7 @@ def run():
             all_loss = loss_crit(outs.transpose(2, 1), y)
             all_loss.backward()
         losses.append(all_loss.item())
-        if config.model in ['SAB']:
-            torch.nn.utils.clip_grad_norm(model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip)
         optimizer.step()
         if orth_optimizer is not None:
             orth_optimizer.step()
