@@ -11,15 +11,16 @@ from experiment import Experiment
 from common import construct_heatmap_data, onehot
 from utils import (generate_denoise_batch,
                    generate_copy_batch)
+import ast
 
 parser = argparse.ArgumentParser(description='Synthetic task runner')
 # task params
 parser.add_argument('--name', type=str, default=None)
 parser.add_argument('--group', type=str, default=None)
-parser.add_argument('--device', type=int, default=None)
+parser.add_argument('--device', type=int, default=1)
 parser.add_argument('--task', type=str, default='copy',
                     choices=['copy', 'denoise'])
-parser.add_argument('--iters', type=int, default=20000)
+parser.add_argument('--iters', type=int, default=5000)
 parser.add_argument('--T', type=int, default=200, help='Delay')
 parser.add_argument('--n_labels', type=int, default=8, help='Number of labels')
 parser.add_argument('--seq_len', type=int, default=10,
@@ -50,7 +51,7 @@ parser.add_argument('--opt', type=str, default='RMSProp',
 parser.add_argument('--lr', type=float, default=None)
 parser.add_argument('--lr_orth', type=float, default=None)
 parser.add_argument('--alpha', type=float, default=None)
-parser.add_argument('--betas', type=float, default=None, nargs="+")
+parser.add_argument('--betas', type=str, default=None)#, nargs="+")
 parser.add_argument('--cuda', action='store_true', default=False)
 parser.add_argument('--clip', type=float, default=1.0,
                     help='gradient clipping norm value')
@@ -86,13 +87,13 @@ def run():
         nonlin='relu',
         batch_size=12,
         learning_rate=0.0002,
-        betas=(0.5, 0.999),
+        betas="(0.9, 0.999)",
         alpha=0.9
     )
-
+    print(args.betas)
     # create save_dir using wandb name
     if args.name is None:
-        run = wandb.init(project="rec-att-project",
+        run = wandb.init(project="RecAttModels",
                          config=hyper_parameter_defaults,
                          group=args.group)
         wandb.config["more"] = "custom"
@@ -103,7 +104,7 @@ def run():
         config.save_dir = os.path.join('experiments', args.task, run.name)
         run.save()
     else:
-        run = wandb.init(project="rec-att-project",
+        run = wandb.init(project="RecAttModels",
                          config=hyper_parameter_defaults,
                          name=args.name,
                          group=args.group)
@@ -124,9 +125,11 @@ def run():
         batch_generator = generate_copy_batch
     elif args.task == 'denoise':
         batch_generator = generate_denoise_batch
-
+    
     # update config object with args
     wandb.config.update(args, allow_val_change=True)
+    config.update({'betas': ast.literal_eval(config.betas)}, allow_val_change=True)
+    print(config.betas)
     # create experiment object
     experiment = Experiment(config)
     model = experiment.model
@@ -195,12 +198,12 @@ def run():
             labels_loss.backward(retain_graph=True)
             wandb.log({'label loss': labels_loss.item()})
 
-            grads = [h.grad.data.norm(2).clone().cpu() for h in hiddens]
+            grads = [torch.log(h.grad.data.norm(2)).clone().cpu() for h in hiddens]
             fig = go.Figure(data=go.Scatter(x=list(range(len(grads))),
                                             y=grads))
             fig.update_layout(title='Gradient flow (update={})'.format(i),
                               xaxis=dict(title='t'),
-                              yaxis=dict(title='$\\frac{dL}{dh_t}$'))
+                              yaxis=dict(title='log(dL/dh)'))
 
 
             # log heat maps for attention models
@@ -212,8 +215,8 @@ def run():
                     #wandb.log({'heat map': wandb.plots.HeatMap(x_labels = range(len(model.rnn.alphas)),
                     #                                           y_labels = range(len(model.rnn.alphas)),
                     #                                           matrix_values=hm)})
-                else:
-                    hms.append(hm)
+                #else:
+                hms.append(hm)
             if i % config.loggrads == 0:
                 wandb.log({'grads': fig})
 
@@ -222,7 +225,7 @@ def run():
 
         wandb.log({"loss": all_loss.item()})
         wandb.log({"accuracy": acc.item()})
-    if config.model in ['MemRNN'] and config.loghmvid:
+    if True:#config.model in ['MemRNN'] and config.loghmvid:
         hms_vid = 255*torch.stack(hms, dim=0).unsqueeze(1).detach().cpu().numpy()
         wandb.log({"video": wandb.Video(hms_vid, fps=4, format="gif")})
 
