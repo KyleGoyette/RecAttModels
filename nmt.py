@@ -10,7 +10,8 @@ import wandb
 import revtok
 from experiment import NMTExperiment
 from common import train_nmt, eval_nmt, visualize_transformer_attention, convert_sentence_to_tensor, convert_tensor_to_sentence
-from models.NMTModels import Seq2Seq, RNNEncoder, RNNDecoder
+#from models.NMTModels import Seq2Seq, RNNEncoder, RNNDecoder
+from models.NMTModels import TransformerSeq2Seq, AttnSeq2Seq
 
 parser = argparse.ArgumentParser(description='Neural machine translation')
 # task params
@@ -170,7 +171,13 @@ def run():
                                               trg_tensor.unsqueeze(0))
         translation = convert_tensor_to_sentence(torch.argmax(output, dim=-1).squeeze(0),
                                                  TRG)
-        visualize_transformer_attention(attention, src, translation)
+        if isinstance(model, TransformerSeq2Seq):
+            visualize_transformer_attention(attention, src, translation)
+        elif isinstance(model, AttnSeq2Seq):
+            # TODO: visualize memnet attention
+            #visualize_memnet_attention(attention, src, translation)
+            pass
+
 
         print(f'Epoch: {i} Train Loss: {train_loss} Val Loss {val_loss}')
 

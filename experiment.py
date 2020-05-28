@@ -130,9 +130,10 @@ class Experiment(object):
                              hidden_size=args.nhid,
                              num_layers=args.nlayers,
                              num_classes=args.n_labels+1,
-                             truncate_length=100,
-                             attn_every_k=5,
-                             top_k=5)
+                             truncate_length=args.trunc,
+                             attn_every_k=args.attk,
+                             top_k=args.topk,
+                             device=args.device)
             return model
         elif model_name == 'Trans':
             base = Transformer(d_model=args.input_size,

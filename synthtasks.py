@@ -6,7 +6,7 @@ import time
 import os
 import plotly.express as px
 import plotly.graph_objects as go
-
+from models.SAB import SAB_LSTM
 from experiment import Experiment
 from common import construct_heatmap_data, onehot
 from utils import (generate_denoise_batch,
@@ -16,7 +16,7 @@ parser = argparse.ArgumentParser(description='Synthetic task runner')
 # task params
 parser.add_argument('--name', type=str, default=None)
 parser.add_argument('--group', type=str, default=None)
-parser.add_argument('--device', type=int, default=1)
+parser.add_argument('--device', type=int, default=None)
 parser.add_argument('--task', type=str, default='copy',
                     choices=['copy', 'denoise'])
 parser.add_argument('--iters', type=int, default=20000)
@@ -52,13 +52,24 @@ parser.add_argument('--lr_orth', type=float, default=None)
 parser.add_argument('--alpha', type=float, default=None)
 parser.add_argument('--betas', type=float, default=None, nargs="+")
 parser.add_argument('--cuda', action='store_true', default=False)
+
+#SAB
+parser.add_argument('--attk', type=int, default=2,
+                    help='SAB attend every k steps')
+parser.add_argument('--trunc', type=int, default=5,
+                    help='SAB truncate backprop')
+parser.add_argument('--topk', type=int, default=5,
+                    help='SAB select topk memories')
+
+# logging
 parser.add_argument('--logfreq', type=int, default=50,
                     help='frequency to log heatmaps, gradients')
 parser.add_argument('--loghmvid', action='store_true', default=False,
                     help='log heatmaps as a video')
-
 parser.add_argument('--loggrads', type=int, default=500,
                     help='frequency to log grads')
+
+
 
 def run():
     # set up hyperparameters for sweeps
@@ -147,16 +158,19 @@ def run():
             y = y.to(config.device)
 
         model.zero_grad()
-        if config.model in ['SAB']:
-            if config.onehot:
-                x = onehot(x, config.n_labels)
-            outs = model.forward(x)
-        else:
-            x = x.transpose(1, 0)
-            outs, hiddens = model.forward(x)
-        all_loss = loss_crit(outs.transpose(2, 1), y)
-        all_loss.backward()
+        with torch.autograd.set_detect_anomaly(True):
+            if config.model in ['SAB']:
+                if config.onehot:
+                    x = onehot(x, config.n_labels)
+                outs, hiddens = model.forward(x)
+            else:
+                x = x.transpose(1, 0)
+                outs, hiddens = model.forward(x)
+            all_loss = loss_crit(outs.transpose(2, 1), y)
+            all_loss.backward()
         losses.append(all_loss.item())
+        if config.model in ['SAB']:
+            torch.nn.utils.clip_grad_norm(model.parameters(), 1.0)
         optimizer.step()
         if orth_optimizer is not None:
             orth_optimizer.step()
@@ -171,7 +185,7 @@ def run():
             if config.model in ['SAB']:
                 if config.onehot:
                     x_const_onehot = onehot(x_const, config.n_labels)
-                outs = model.forward(x_const_onehot)
+                outs, hiddens = model.forward(x_const_onehot)
             else:
                 outs, hiddens = model.forward(x_const.transpose(1, 0))
 
