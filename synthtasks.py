@@ -214,7 +214,6 @@ def run():
             #elif config.model == 'SAB':
             #    hm = model.alphas
             fig_hm = go.Figure(go.Heatmap(z=hm, showscale=False))#.imshow(hm)
-            fig_hm.show()
             wandb.log({'heat map': fig_hm})
             #wandb.log({'heat map': wandb.plots.HeatMap(x_labels = range(len(model.rnn.alphas)),
             #                                           y_labels = range(len(model.rnn.alphas)),
