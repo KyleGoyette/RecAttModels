@@ -89,12 +89,11 @@ class Experiment(object):
             elif config.lr is not None:
                 kwargs.update({'lr': config.lr/10})
         if name.lower() == 'rmsprop':
-            if config.betas is not None:
+            if config.alpha is not None:
                 kwargs.update({'alpha': config.alpha})
             optimizer = torch.optim.RMSprop(**kwargs)
         elif name.lower() == 'adam':
-            if config.alpha is not None:
-                kwargs.update({'betas': config.betas})
+            kwargs.update({'betas': (config.beta0, config.beta1)})
             optimizer = torch.optim.Adam(**kwargs)
         elif name.lower() == 'sgd':
             # add lr if none, required for sgd

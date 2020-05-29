@@ -4,7 +4,7 @@ from common import onehot
 import numpy as np
 from common import modrelu
 from models.expRNN.expm32 import expm32
-
+from models.SAB import SAB_LSTM
 
 def henaff_init(n):
     # Initialization of skew-symmetric matrix
@@ -55,6 +55,8 @@ class RecurrentCopyModel(nn.Module):
             # append to lists for return
             hiddens.append(h)
             outs.append(out)
+        if isinstance(self.rnn, MemRNN) or isinstance(self.rnn, SAB_LSTM):
+            self.alphas = self.rnn.alphas
         return torch.stack(outs, dim=1), hiddens
 
 

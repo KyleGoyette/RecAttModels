@@ -17,7 +17,7 @@ parser = argparse.ArgumentParser(description='Synthetic task runner')
 # task params
 parser.add_argument('--name', type=str, default=None)
 parser.add_argument('--group', type=str, default=None)
-parser.add_argument('--device', type=int, default=1)
+parser.add_argument('--device', type=int, default=None)
 parser.add_argument('--task', type=str, default='copy',
                     choices=['copy', 'denoise'])
 parser.add_argument('--iters', type=int, default=5000)
@@ -51,7 +51,8 @@ parser.add_argument('--opt', type=str, default='RMSProp',
 parser.add_argument('--lr', type=float, default=None)
 parser.add_argument('--lr_orth', type=float, default=None)
 parser.add_argument('--alpha', type=float, default=None)
-parser.add_argument('--betas', type=str, default=None)#, nargs="+")
+parser.add_argument('--beta0', type=float, default=0.9)
+parser.add_argument('--beta1', type=float, default=0.999)
 parser.add_argument('--cuda', action='store_true', default=False)
 parser.add_argument('--clip', type=float, default=1.0,
                     help='gradient clipping norm value')
@@ -65,8 +66,8 @@ parser.add_argument('--topk', type=int, default=5,
                     help='SAB select topk memories')
 
 # logging
-parser.add_argument('--logfreq', type=int, default=50,
-                    help='frequency to log heatmaps, gradients')
+parser.add_argument('--loghm', type=int, default=50,
+                    help='frequency to log heatmaps')
 parser.add_argument('--loghmvid', action='store_true', default=False,
                     help='log heatmaps as a video')
 parser.add_argument('--loggrads', type=int, default=500,
@@ -87,10 +88,10 @@ def run():
         nonlin='relu',
         batch_size=12,
         learning_rate=0.0002,
-        betas="(0.9, 0.999)",
+        beta0=0.9,
+        beta1=0.999,
         alpha=0.9
     )
-    print(args.betas)
     # create save_dir using wandb name
     if args.name is None:
         run = wandb.init(project="RecAttModels",
@@ -128,8 +129,6 @@ def run():
     
     # update config object with args
     wandb.config.update(args, allow_val_change=True)
-    config.update({'betas': ast.literal_eval(config.betas)}, allow_val_change=True)
-    print(config.betas)
     # create experiment object
     experiment = Experiment(config)
     model = experiment.model
@@ -184,7 +183,8 @@ def run():
         acc = correct/float(y.shape[0]*config.seq_len)
         accs.append(acc)
 
-        if i % config.logfreq == 0:
+        # log gradients
+        if i % config.loggrads == 0:
             model.zero_grad()
             if config.model in ['SAB']:
                 if config.onehot:
@@ -198,34 +198,37 @@ def run():
             labels_loss.backward(retain_graph=True)
             wandb.log({'label loss': labels_loss.item()})
 
-            grads = [torch.log(h.grad.data.norm(2)).clone().cpu() for h in hiddens]
+            grads = [h.grad.data.norm(2).clone().cpu() for h in hiddens]
             fig = go.Figure(data=go.Scatter(x=list(range(len(grads))),
                                             y=grads))
             fig.update_layout(title='Gradient flow (update={})'.format(i),
                               xaxis=dict(title='t'),
-                              yaxis=dict(title='log(dL/dh)'))
+                              yaxis=dict(title='dL/dh'))
+            wandb.log({'grads': fig})
 
 
-            # log heat maps for attention models
-            if config.model in ['MemRNN']:
-                hm = construct_heatmap_data(model.rnn.alphas).cpu().clone()
-                if not config.loghmvid:
-                    fig_hm = go.Figure(go.Heatmap(z=hm, showscale=False))#.imshow(hm)
-                    wandb.log({'heat map': fig_hm})
-                    #wandb.log({'heat map': wandb.plots.HeatMap(x_labels = range(len(model.rnn.alphas)),
-                    #                                           y_labels = range(len(model.rnn.alphas)),
-                    #                                           matrix_values=hm)})
-                #else:
+        # log heat maps for attention models
+        if i % config.loghm == 0:
+            #if config.model == 'MemRNN':
+            hm = construct_heatmap_data(model.alphas).cpu().clone()
+            #elif config.model == 'SAB':
+            #    hm = model.alphas
+            fig_hm = go.Figure(go.Heatmap(z=hm, showscale=False))#.imshow(hm)
+            fig_hm.show()
+            wandb.log({'heat map': fig_hm})
+            #wandb.log({'heat map': wandb.plots.HeatMap(x_labels = range(len(model.rnn.alphas)),
+            #                                           y_labels = range(len(model.rnn.alphas)),
+            #                                           matrix_values=hm)})
+            if config.loghmvid:
                 hms.append(hm)
-            if i % config.loggrads == 0:
-                wandb.log({'grads': fig})
+
 
         print('Update {}, Time for Update: {} , Average Loss: {}, Accuracy: {}'
               .format(i + 1, time.time() - s_t, all_loss.item(), acc))
 
         wandb.log({"loss": all_loss.item()})
         wandb.log({"accuracy": acc.item()})
-    if True:#config.model in ['MemRNN'] and config.loghmvid:
+    if config.model in ['MemRNN', 'SAB'] and config.loghmvid:
         hms_vid = 255*torch.stack(hms, dim=0).unsqueeze(1).detach().cpu().numpy()
         wandb.log({"video": wandb.Video(hms_vid, fps=4, format="gif")})
 

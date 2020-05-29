@@ -2,7 +2,7 @@
 
 import torch
 import torch.nn as nn
-
+import matplotlib.pyplot as plt
 class Sparse_attention(nn.Module):
     def __init__(self, top_k=5):
         super(Sparse_attention, self).__init__()
@@ -21,7 +21,7 @@ class Sparse_attention(nn.Module):
         if time_step <= self.top_k:
             # just make everything greater than 0, and return it
             # delta = torch.min(attn_s, dim = 1)[0]
-            return attn_s
+            return torch.nn.functional.softmax(attn_s, dim=1)
         else:
             # get top k and return it
             # bottom_k = attn_s.size()[1] - self.top_k
@@ -36,6 +36,7 @@ class Sparse_attention(nn.Module):
         attn_w_sum = torch.sum(attn_w, dim=1)
         attn_w_sum = attn_w_sum + eps
         attn_w_normalize = attn_w / attn_w_sum.unsqueeze(1).repeat(1, time_step)
+        assert(torch.min(attn_w_normalize) >= 0)
         return attn_w_normalize
 
 class SAB_LSTM(nn.Module):
@@ -144,12 +145,20 @@ class SAB_LSTM(nn.Module):
             # are left non-zero and the other ones are zeroed.
             #
             attn_w = attn_w.view(batch_size, remember_size)
-            attn_w = self.sparse_attn(attn_w)
+            attn_w = self.sparse_attn.forward(attn_w)
+            assert torch.min(attn_w) >= 0, 'check 0'
             attn_w = attn_w.view(batch_size, remember_size, 1)
-
-            if self.atten_print >= (time_size - i - 1):
-                attn_w_viz.append(attn_w.mean(dim=0).view(remember_size))
-
+            assert torch.min(attn_w) >= 0, 'check 1'
+            #if self.atten_print >= (time_size - i - 1):
+            filler = attn_w.new_zeros((1,attn_w.shape[1]*(self.attn_every_k - 1)))
+            # this line tosses 0s between all of the
+            interspaced_attn = torch.cat((attn_w[0].clone().detach().t(), filler), dim=1).view(self.attn_every_k, -1).t().reshape(-1, 1)
+            assert torch.min(attn_w) >= 0, 'check 2'
+            #print(torch.sum(interspaced_attn), torch.min(interspaced_attn), torch.max(interspaced_attn))
+            #print(interspaced_attn.shape)
+            attn_w_viz.append(interspaced_attn)
+            #attn_w_viz.append(torch.cat((attn_w[0, :, 0], attn_w[0, :].new_zeros(time_size - attn_w[0,:,0].shape[0])), dim=0))
+            #print(time_size,attn_w_viz[-1].shape)
             if torch.sum((torch.isnan(attn_w))) > 0:
                 print(f'{i} attn_w2')
                 raise
@@ -198,4 +207,6 @@ class SAB_LSTM(nn.Module):
         out = outputs.contiguous().view(shp[0] * shp[1], shp[2])
         out = self.fc(out)
         out = out.view(shp[0], shp[1], self.num_classes)
+        self.alphas = attn_w_viz
+
         return out, h_s
