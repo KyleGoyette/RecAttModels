@@ -1,0 +1,39 @@
+program: synthtasks.py
+project: RecurrentAttentiveModels
+command:
+- ${env}
+- ${interpreter}
+- ${program}
+- ${args}
+- "--onehot"
+- "--T=100"
+- "--group=T100_SAB_copy"
+- "--loghmvid"
+- "--device=1"
+description: Copy SAB Sweep
+method: bayesian
+metric:
+  goal: minimize
+  name: loss
+parameters:
+  lr:
+    max: 0.001
+    min: 0.0001
+  batch_size:
+    distribution: int_uniform
+    max: 12
+    min: 6
+  beta0:
+    values: [0, 0.9]
+  beta1:
+    values: [0.5, 0.95, 0.999]
+  clip:
+    values: [1, 10, 100]
+  topk:
+    values: [3, 5, 10]
+  trunc:
+    values: [2, 5, 10]
+  attk:
+    values: [2, 5, 10]
+  nlayers:
+    values: [1, 2, 3]
