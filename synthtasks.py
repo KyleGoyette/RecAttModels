@@ -20,7 +20,7 @@ parser.add_argument('--group', type=str, default=None)
 parser.add_argument('--device', type=int, default=None)
 parser.add_argument('--task', type=str, default='copy',
                     choices=['copy', 'denoise'])
-parser.add_argument('--iters', type=int, default=5000)
+parser.add_argument('--iters', type=int, default=10000)
 parser.add_argument('--T', type=int, default=200, help='Delay')
 parser.add_argument('--n_labels', type=int, default=8, help='Number of labels')
 parser.add_argument('--seq_len', type=int, default=10,
@@ -178,7 +178,7 @@ def run():
         if orth_optimizer is not None:
             orth_optimizer.step()
         preds = torch.argmax(outs[:, -config.seq_len:, :], dim=2)
-        wandb.log({"predictions": wandb.Histogram(preds.detach().cpu().numpy())})
+        wandb.log({"predictions": wandb.Histogram(preds.detach().cpu().numpy())}, step=i)
         correct = torch.sum(preds == y[:, -config.seq_len:])
         acc = correct/float(y.shape[0]*config.seq_len)
         accs.append(acc)
@@ -196,7 +196,7 @@ def run():
             labels_loss = loss_crit(outs[-config.seq_len:, :].transpose(2, 1),
                                     y_const[-config.seq_len:, :])
             labels_loss.backward(retain_graph=True)
-            wandb.log({'label loss': labels_loss.item()})
+            wandb.log({'label loss': labels_loss.item()}, step=i)
 
             grads = [h.grad.data.norm(2).clone().cpu() for h in hiddens]
             fig = go.Figure(data=go.Scatter(x=list(range(len(grads))),
@@ -204,17 +204,14 @@ def run():
             fig.update_layout(title='Gradient flow (update={})'.format(i),
                               xaxis=dict(title='t'),
                               yaxis=dict(title='dL/dh'))
-            wandb.log({'grads': fig})
+            wandb.log({'grads': fig}, step=i)
 
 
         # log heat maps for attention models
-        if i % config.loghm == 0:
-            #if config.model == 'MemRNN':
+        if i % config.loghm == 0 and model in ['MemRNN', 'SAB']:
             hm = construct_heatmap_data(model.alphas).cpu().clone()
-            #elif config.model == 'SAB':
-            #    hm = model.alphas
             fig_hm = go.Figure(go.Heatmap(z=hm, showscale=False))#.imshow(hm)
-            wandb.log({'heat map': fig_hm})
+            wandb.log({'heat map': fig_hm}, step=i)
             #wandb.log({'heat map': wandb.plots.HeatMap(x_labels = range(len(model.rnn.alphas)),
             #                                           y_labels = range(len(model.rnn.alphas)),
             #                                           matrix_values=hm)})
@@ -225,8 +222,8 @@ def run():
         print('Update {}, Time for Update: {} , Average Loss: {}, Accuracy: {}'
               .format(i + 1, time.time() - s_t, all_loss.item(), acc))
 
-        wandb.log({"loss": all_loss.item()})
-        wandb.log({"accuracy": acc.item()})
+        wandb.log({"loss": all_loss.item()}, step=i)
+        wandb.log({"accuracy": acc.item()}, step=i)
     if config.model in ['MemRNN', 'SAB'] and config.loghmvid:
         hms_vid = 255*torch.stack(hms, dim=0).unsqueeze(1).detach().cpu().numpy()
         wandb.log({"video": wandb.Video(hms_vid, fps=4, format="gif")})
