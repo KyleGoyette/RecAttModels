@@ -4,14 +4,13 @@ import wandb
 import argparse
 import time
 import os
-import plotly.express as px
 import plotly.graph_objects as go
-from models.SAB import SAB_LSTM
+
 from experiment import Experiment
 from common import construct_heatmap_data, onehot
 from utils import (generate_denoise_batch,
                    generate_copy_batch)
-import ast
+
 
 parser = argparse.ArgumentParser(description='Synthetic task runner')
 # task params
@@ -66,7 +65,7 @@ parser.add_argument('--topk', type=int, default=5,
                     help='SAB select topk memories')
 
 # logging
-parser.add_argument('--loghm', type=int, default=50,
+parser.add_argument('--loghm', type=int, default=500,
                     help='frequency to log heatmaps')
 parser.add_argument('--loghmvid', action='store_true', default=False,
                     help='log heatmaps as a video')
@@ -94,7 +93,7 @@ def run():
     )
     # create save_dir using wandb name
     if args.name is None:
-        run = wandb.init(project="RecAttModels",
+        run = wandb.init(project="RecurrentAttentiveModels",
                          config=hyper_parameter_defaults,
                          group=args.group)
         wandb.config["more"] = "custom"
@@ -105,7 +104,7 @@ def run():
         config.save_dir = os.path.join('experiments', args.task, run.name)
         run.save()
     else:
-        run = wandb.init(project="RecAttModels",
+        run = wandb.init(project="RecurrentAttentiveModels",
                          config=hyper_parameter_defaults,
                          name=args.name,
                          group=args.group)
@@ -162,16 +161,15 @@ def run():
             y = y.to(config.device)
 
         model.zero_grad()
-        with torch.autograd.set_detect_anomaly(True):
-            if config.model in ['SAB']:
-                if config.onehot:
-                    x = onehot(x, config.n_labels)
-                outs, hiddens = model.forward(x)
-            else:
-                x = x.transpose(1, 0)
-                outs, hiddens = model.forward(x)
-            all_loss = loss_crit(outs.transpose(2, 1), y)
-            all_loss.backward()
+        if config.model in ['SAB']:
+            if config.onehot:
+                x = onehot(x, config.n_labels)
+            outs, hiddens = model.forward(x)
+        else:
+            x = x.transpose(1, 0)
+            outs, hiddens = model.forward(x)
+        all_loss = loss_crit(outs.transpose(2, 1), y)
+        all_loss.backward()
         losses.append(all_loss.item())
         torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip)
         optimizer.step()
@@ -184,15 +182,16 @@ def run():
         accs.append(acc)
 
         # log gradients
-        if i % config.loggrads == 0:
+        if i % config.loggrads == 0 or i % config.loghm == 0:
             model.zero_grad()
             if config.model in ['SAB']:
                 if config.onehot:
                     x_const_onehot = onehot(x_const, config.n_labels)
+
                 outs, hiddens = model.forward(x_const_onehot)
             else:
                 outs, hiddens = model.forward(x_const.transpose(1, 0))
-
+        if i % config.loggrads == 0:
             labels_loss = loss_crit(outs[-config.seq_len:, :].transpose(2, 1),
                                     y_const[-config.seq_len:, :])
             labels_loss.backward(retain_graph=True)
@@ -203,14 +202,22 @@ def run():
                                             y=grads))
             fig.update_layout(title='Gradient flow (update={})'.format(i),
                               xaxis=dict(title='t'),
-                              yaxis=dict(title='dL/dh'))
+                              yaxis=dict(title='$dL/dh$'))
             wandb.log({'grads': fig}, step=i)
 
 
         # log heat maps for attention models
-        if i % config.loghm == 0 and model in ['MemRNN', 'SAB']:
+        if i % config.loghm == 0 and config.model in ['MemRNN', 'SAB']:
             hm = construct_heatmap_data(model.alphas).cpu().clone()
-            fig_hm = go.Figure(go.Heatmap(z=hm, showscale=False))#.imshow(hm)
+            #fig1 = xp.imshow(1-hm, color_continuous_scale=px.colors.sequential.Greys)
+
+            fig_hm = go.Figure(go.Heatmap(z=hm,
+                                          x=list(range(hm.shape[1])),
+                                          y=list(range(1, hm.shape[0]+1)),
+                                          showscale=False))
+            fig_hm.update_layout(title="",
+                                 xaxis_title="Attention step",
+                                 yaxis_title="timestep")
             wandb.log({'heat map': fig_hm}, step=i)
             #wandb.log({'heat map': wandb.plots.HeatMap(x_labels = range(len(model.rnn.alphas)),
             #                                           y_labels = range(len(model.rnn.alphas)),

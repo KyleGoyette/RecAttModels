@@ -108,9 +108,15 @@ class modrelu(nn.Module):
 
 
 def construct_heatmap_data(alphas):
-    T = len(alphas)
-
-    return torch.stack([torch.cat((a[:, 0].clone().detach(), a.new_zeros(T - a.shape[0])),dim=0) for a in alphas], dim=0)
+    tot_length = len(alphas)
+    return torch.stack(
+        [
+            torch.cat(
+                (a[:, 0].clone().detach(), a.new_zeros(tot_length - a.shape[0])),
+                dim=0)
+            for a in alphas
+        ],
+        dim=0)
 
 
 def train_nmt(model, iterator, optimizer, criterion, config, run=None,
