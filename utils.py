@@ -66,7 +66,7 @@ def grad_visualization(grads, attention):
     """
 
     select_point = alt.selection_single(
-        on='mouseover', nearest=True, fields=['x1', 'y1'], empty="none"
+        on='mouseover', nearest=True, fields=['x2', 'y2'], empty="none"
     )
 
     attention_jsonlist = attention_matrix_to_jsonlist(attention, grads)
@@ -84,24 +84,26 @@ def grad_visualization(grads, attention):
         y='y1:Q',
         x2='x2:Q',
         y2='y2:Q',
-        opacity='bloop:Q'
+        opacity='attention strength:Q'
     ).transform_filter(
         select_point
     )
 
-    grads_json = json.dumps([{'x': i, 'y': j} for i, j in enumerate(grads)])
+    grads_json = json.dumps([{'x2': i, 'y2': j} for i, j in enumerate(grads)])
     grads_data = alt.Data(values=grads_json)
     chart1 = alt.Chart(grads_data).mark_circle().encode(
-        x='x:T',
-        y='y:Q',
-    ).transform_lookup(
-        lookup="x2",
-        from_=lookup_data
+        x='x2:T',
+        y='y2:Q',
     ).add_selection(
         select_point
     )
 
-    (chart2 + chart1).resolve_scale(x='shared', y='shared').show()
+    chart3 = alt.Chart(grads_data).mark_line().encode(
+        x='x2:T',
+        y='y2:Q'
+    )
+
+    (chart2 + chart1 + chart3).resolve_scale(x='shared', y='shared').show()
 
 def attention_matrix_to_jsonlist(attention, grads):
     print(attention.shape, len(grads))
@@ -119,7 +121,7 @@ def create_row(attn_row, grads, t):
             'y1': grads[t],
             'x2': i,
             'y2': grads[i],
-            'bloop': attn_row[i]
+            'attention strength': attn_row[i] if i != len(attn_row) -1 else 1
         }
         row.append(linedef)
     return row
