@@ -31,7 +31,11 @@ class RecurrentCopyModel(nn.Module):
         self.ol = nn.Linear(hidden_size, n_labels+1)
         nn.init.kaiming_normal_(self.ol.weight.data, nonlinearity="relu")
 
-    def forward(self, input):
+    def forward(self, input, ablate_recurrence=False, ablate_attention=False):
+        kwargs = {
+            'ablate_recurrence_grads': ablate_recurrence,
+            'ablate_attention_grads': ablate_attention
+        }
         hiddens = []
         outs = []
         hidden = None
@@ -39,9 +43,9 @@ class RecurrentCopyModel(nn.Module):
             # pass into RNN
             if self.onehot:
                 inp_onehot = onehot(input[i, :], self.n_labels)
-                hidden = self.rnn.forward(inp_onehot, hidden)
+                hidden = self.rnn.forward(inp_onehot, hidden, **kwargs)
             else:
-                hidden = self.rnn.forward(input[i, :].unsqueeze(1).float(), hidden)
+                hidden = self.rnn.forward(input[i, :].unsqueeze(1).float(), hidden, **kwargs)
             # get hid state pass into ol layer
             if isinstance(self.rnn, nn.LSTMCell):
                 h, c = hidden
@@ -89,14 +93,15 @@ class MemRNN(nn.Module):
         self.v = nn.Parameter(torch.Tensor(1, hidden_size, 1))
 
         nn.init.xavier_normal_(self.v.data)
-        self.V.weight.data = torch.as_tensor(henaff_init(hidden_size))
-        A = self.V.weight.data.triu(diagonal=1)
-        A = A - A.t()
-        self.V.weight.data = expm32(A)
+        #self.V.weight.data = torch.as_tensor(henaff_init(hidden_size))
+        #A = self.V.weight.data.triu(diagonal=1)
+        #A = A - A.t()
+        #self.V.weight.data = expm32(A)
         self.es = []
         self.alphas = []
 
-    def forward(self, x, hidden, reset=False):
+    def forward(self, x, hidden, reset=False,
+                ablate_recurrence_grads=False, ablate_attention_grads=False):
         if hidden is None or reset:
             if hidden is None:
                 hidden = x.new_zeros(x.shape[0],
@@ -131,12 +136,21 @@ class MemRNN(nn.Module):
                     all_hs),
                 dim=0
             )
-            self.st = all_hs[-1] + ct
+            #print(ablate_recurrence_grads, ablate_attention_grads)
+            assert not (ablate_attention_grads and ablate_recurrence_grads)
+            if ablate_attention_grads:
+                self.st = all_hs[-1] + ct.detach()
+            elif ablate_recurrence_grads:
+                self.st = all_hs[-1].detach() + ct
+            else:
+                self.st = all_hs[-1] + ct
             h = self.U(x) + self.V(self.st)
 
         if self.nonlinearity:
             h = self.nonlinearity(h)
         # call retain grad to keep the gradient to log later
+        #h = h.detach()
         h.retain_grad()
+
         self.memory.append(h)
         return h
