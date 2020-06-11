@@ -5,6 +5,7 @@ import argparse
 import time
 import os
 import plotly.graph_objects as go
+from grad_vis import grad_attention_viz_name, grad_attention_viz
 
 from experiment import Experiment
 from common import construct_heatmap_data, onehot
@@ -93,7 +94,7 @@ def run():
     )
     # create save_dir using wandb name
     if args.name is None:
-        run = wandb.init(project="RecurrentAttentiveModels",
+        run = wandb.init(project="test-project",
                          config=hyper_parameter_defaults,
                          group=args.group)
         wandb.config["more"] = "custom"
@@ -104,11 +105,11 @@ def run():
         config.save_dir = os.path.join('experiments', args.task, run.name)
         run.save()
     else:
-        run = wandb.init(project="RecurrentAttentiveModels",
+        run = wandb.init(project="test-project",
                          config=hyper_parameter_defaults,
                          name=args.name,
                          group=args.group)
-        wandb.config["more"] = "custom"
+        #wandb.config["more"] = "custom"
         run.name = os.path.join(args.task, run.name)
         config = wandb.config
         config.save_dir = os.path.join('experiments', args.task, args.name)
@@ -224,7 +225,10 @@ def run():
             #                                           matrix_values=hm)})
             if config.loghmvid:
                 hms.append(hm)
-
+            if i % config.loggrads == 0 and i% config.loghm == 0:
+                wandb.log({f"Gradient/Attention Visualization Bar_{i}": grad_attention_viz(grads,hm)})
+                #wandb.log(
+                #    {f"Gradient/Attention Visualization Line_{i}": grad_attention_viz_name(grads, hm, 'wandb/grad_line_plot/v1')})
 
         print('Update {}, Time for Update: {} , Average Loss: {}, Accuracy: {}'
               .format(i + 1, time.time() - s_t, all_loss.item(), acc))

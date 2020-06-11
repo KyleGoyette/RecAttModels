@@ -104,15 +104,11 @@ class MemRNN(nn.Module):
                                      requires_grad=True)
                 if self.device is not None:
                     hidden = hidden.to(self.device)
-            self.memory = [hidden]
+            self.memory = []
             h = self.U(x) + self.V(hidden)
             self.st = h
             self.es = []
-
-            alpha = torch.ones((1, x.shape[0]))
-            if self.device is not None:
-                alpha = alpha.to(self.device)
-            self.alphas = [alpha]
+            self.alphas = []
 
         else:
             all_hs = torch.stack(self.memory)
