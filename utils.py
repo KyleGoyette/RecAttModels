@@ -56,3 +56,32 @@ def normal(tensor, mean=0, std=1):
         return tensor
     else:
         return tensor.normal_(mean, std)
+
+
+def perform_synthtask_ablations(model, x, y, loss_crit, seq_len):
+    # perform recurrence ablation
+    (out_ablated_rec,
+     hids_ablated_rec) = model.forward(x, ablate_recurrence=True)
+
+    labels_loss_ablated_rec = loss_crit(
+        out_ablated_rec[:, -seq_len:, :].transpose(2, 1),
+        y[:, -seq_len:]
+    )
+    model.zero_grad()
+    labels_loss_ablated_rec.backward(retain_graph=True)
+    grads_ablated_rec = [h.grad.data.norm(2).clone().cpu()
+                         for h in hids_ablated_rec]
+
+    # perform recurrence ablation
+    (out_ablated_attn,
+     hids_ablated_attn) = model.forward(x,
+                                        ablate_attention=True)
+    labels_loss_ablated_attn = loss_crit(
+        out_ablated_attn[:, -seq_len:, :].transpose(2, 1),
+        y[:, -seq_len:]
+    )
+    labels_loss_ablated_attn.backward(retain_graph=True)
+    grads_ablated_attn = [h.grad.data.norm(2).clone().cpu()
+                          for h in hids_ablated_attn]
+
+    return grads_ablated_rec, grads_ablated_attn

@@ -6,11 +6,12 @@ import time
 import os
 import plotly.graph_objects as go
 from grad_vis import grad_attention_viz_name, grad_attention_viz
-
+import numpy as np
 from experiment import Experiment
 from common import construct_heatmap_data, onehot
 from utils import (generate_denoise_batch,
-                   generate_copy_batch)
+                   generate_copy_batch,
+                   perform_synthtask_ablations)
 
 
 parser = argparse.ArgumentParser(description='Synthetic task runner')
@@ -188,24 +189,9 @@ def run():
             if config.model in ['SAB']:
                 if config.onehot:
                     x_const_onehot = onehot(x_const, config.n_labels)
-
                 outs, hiddens = model.forward(x_const_onehot)
             else:
                 outs, hiddens = model.forward(x_const.transpose(1, 0))
-        if i % config.loggrads == 0:
-            labels_loss = loss_crit(outs[-config.seq_len:, :].transpose(2, 1),
-                                    y_const[-config.seq_len:, :])
-            labels_loss.backward(retain_graph=True)
-            wandb.log({'label loss': labels_loss.item()}, step=i)
-
-            grads = [h.grad.data.norm(2).clone().cpu() for h in hiddens]
-            fig = go.Figure(data=go.Scatter(x=list(range(len(grads))),
-                                            y=grads))
-            fig.update_layout(title='Gradient flow (update={})'.format(i),
-                              xaxis=dict(title='t'),
-                              yaxis=dict(title='$dL/dh$'))
-            wandb.log({'grads': fig}, step=i)
-
 
         # log heat maps for attention models
         if i % config.loghm == 0 and config.model in ['MemRNN', 'SAB']:
@@ -225,8 +211,44 @@ def run():
             #                                           matrix_values=hm)})
             if config.loghmvid:
                 hms.append(hm)
+
+        if i % config.loggrads == 0:
+            labels_loss = loss_crit(outs[:, -config.seq_len:, :].transpose(2, 1),
+                                    y_const[:, -config.seq_len:])
+            labels_loss.backward(retain_graph=True)
+            wandb.log({'label loss': labels_loss.item()}, step=i)
+
+            grads = [h.grad.data.norm(2).clone().cpu() for h in hiddens]
+            fig = go.Figure(data=go.Scatter(x=list(range(len(grads))),
+                                            y=grads,
+                                            name='Grads'))
+            fig.update_layout(title='Gradient flow (update={})'.format(i),
+                              xaxis=dict(title='t'),
+                              yaxis=dict(title='$dL/dh$'))
+            if config.model in ['MemRNN']:
+                (grads_ablated_rec,
+                 grads_ablated_attn) = perform_synthtask_ablations(
+                    model,
+                    x_const.transpose(1, 0),
+                    y_const,
+                    loss_crit,
+                    config.seq_len
+                )
+
+                fig.add_trace(go.Scatter(x=list(range(len(grads_ablated_rec))),
+                                         y=grads_ablated_rec,
+                              name='Ablated Recurrence Grads'))
+
+                model.zero_grad()
+                fig.add_trace(go.Scatter(x=list(range(len(grads_ablated_attn))),
+                                         y=grads_ablated_attn,
+                              name='Ablated Attention Grads'))
+
+
+            fig.show()
+            wandb.log({'grads': fig}, step=i)
             if i % config.loggrads == 0 and i% config.loghm == 0:
-                wandb.log({f"Gradient/Attention Visualization Bar_{i}": grad_attention_viz(grads,hm)})
+                wandb.log({f"Gradient/Attention Visualization Bar_{i}": grad_attention_viz(grads, hm)})
                 #wandb.log(
                 #    {f"Gradient/Attention Visualization Line_{i}": grad_attention_viz_name(grads, hm, 'wandb/grad_line_plot/v1')})
 
@@ -241,4 +263,7 @@ def run():
 
 
 if __name__ == '__main__':
+    torch.random.manual_seed(100)
+    torch.cuda.manual_seed(100)
+    np.random.seed(100)
     run()
