@@ -127,6 +127,10 @@ def train_nmt(model, iterator, optimizer, criterion, config, run=None,
     for i, batch in enumerate(iterator):
         src = batch.src
         trg = batch.trg
+        if config.device is not None:
+            src = src.to(config.device)
+            trg = trg.to(config.device)
+
         optimizer.zero_grad()
         if isinstance(model, TransformerSeq2Seq):
             output, attention = model(src, trg[:, :-1])
@@ -137,12 +141,15 @@ def train_nmt(model, iterator, optimizer, criterion, config, run=None,
             output = output[1:].view(-1, output.shape[-1])
             trg = trg[1:].contiguous().view(-1)
         loss = criterion(output, trg)
-        print(loss.item())
+        #print(loss.item())
         loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
         optimizer.step()
         if run is not None:
             run.log({'train loss': loss.item()})
         losses.append(loss.item())
+        """
         if i % config.logfreq == 0 and run is not None:
             if isinstance(model, TransformerSeq2Seq):
                 log_to_table(output, src, trg.view(src.shape[0], -1),
@@ -154,6 +161,7 @@ def train_nmt(model, iterator, optimizer, criterion, config, run=None,
                              src.transpose(1, 0),
                              trg.view(-1, src.shape[1]).t(),
                              src_field, trg_field, run, 'Train')
+        """
     run.log({'epoch train loss': np.mean(losses)})
     return np.mean(losses)
 
@@ -167,6 +175,9 @@ def eval_nmt(model, iterator, criterion, config, run=None,
         for i, batch in enumerate(iterator):
             src = batch.src
             trg = batch.trg
+            if config.device is not None:
+                src = src.to(config.device)
+                trg = trg.to(config.device)
             if isinstance(model, TransformerSeq2Seq):
                 output, _ = model(src, trg[:, :-1])
                 output = output.contiguous().view(-1, output.shape[-1])
@@ -179,6 +190,7 @@ def eval_nmt(model, iterator, criterion, config, run=None,
             if run is not None:
                 run.log({'valid loss': loss.item()})
             losses.append(loss.item())
+            """
             if i % config.logfreq and run is not None:
                 if isinstance(model, TransformerSeq2Seq):
                     log_to_table(output, src, trg.view(src.shape[0],-1),
@@ -187,30 +199,24 @@ def eval_nmt(model, iterator, criterion, config, run=None,
                     log_to_table(output, src.transpose(1, 0),
                                  trg.view(-1, src.shape[1]).t(),
                                  src_field, trg_field, run, 'Val')
+            """
     run.log({'epoch valid loss': np.mean(losses)})
     return np.mean(losses)
 
 
-def log_to_table(output, src, trg, src_field, trg_field, run, subset):
-    output = output.view(src.shape[0], -1, len(trg_field.vocab))
-    preds = torch.argmax(output, dim=-1)
-    src_pad = src_field.vocab.stoi[src_field.pad_token]
-    trg_pad = trg_field.vocab.stoi[trg_field.pad_token]
-    pred_tokens = [' '.join([trg_field.vocab.itos[pi.item()]
-                             for pi in p if pi != trg_pad])
-                   for p in preds[:5, :]]
-    src_tokens = [' '.join([src_field.vocab.itos[si.item()]
-                            for si in s[1:-1] if si != src_pad])
-                  for s in src[:5, :]]
-    trg_tokens = [' '.join([trg_field.vocab.itos[ti.item()]
-                            for ti in t[:-1] if ti != trg_pad])
-                  for t in trg[:5, :]]
-    print(trg_tokens)
-    data = [[i,j,k] for i,j,k in zip(src_tokens, trg_tokens, pred_tokens)]
+def log_to_table(translation, src_tokens, trg_tokens, run):
+    if isinstance(src_tokens, list):
+        src_tokens = ' '.join(src_tokens)
+    if isinstance(trg_tokens, list):
+        trg_tokens = ' '.join(trg_tokens)
+    if isinstance(translation, list):
+        translation = ' '.join(translation)
+
+    data = [src_tokens, trg_tokens, translation]
     run.log({
-        f"Examples {subset}": wandb.Table(data=data,
+        f"Examples": wandb.Table(data=data,
                               columns=['Input', 'Ground Truth', "Predicted"])
-    })
+    }, commit=False)
 
 
 def visualize_attention(model):
@@ -220,18 +226,65 @@ def visualize_attention(model):
         visualize_memrnn_attention(model)
 
 def visualize_transformer_attention(attention, src, translation):
-    print(translation)
     for i in range(attention.shape[1]):
         wandb.log({f'attention heatmap {i}': wandb.plots.HeatMap(
             x_labels=src,
             y_labels=translation,
             matrix_values=attention[0, i, :, :].detach().cpu().numpy())
-        })
+        }, commit=False)
+    summary_attn = torch.mean(attention[0, :, :, :], dim=0).detach().cpu().numpy()
+    wandb.log({'attention heatmap summary':  wandb.plots.HeatMap(
+        x_labels=src,
+        y_labels=translation,
+        matrix_values=summary_attn
+    )
+    }, commit=True)
 
 
 
 def visualize_memrnn_attention(model):
     pass
+
+def translate_sentence(sentence, src_field, trg_field, spacy_src, model, config, max_len=50):
+    model.eval()
+
+    if isinstance(sentence, str):
+        tokens = [token.text.lower() for token in spacy_src(sentence)]
+    else:
+        tokens = [token.lower() for token in sentence]
+
+    tokens = [src_field.init_token] + tokens + [src_field.eos_token]
+
+    src_indexes = [src_field.vocab.stoi[token] for token in tokens]
+
+    src_tensor = torch.LongTensor(src_indexes).unsqueeze(0).to(config.device)
+
+    src_mask = model.make_src_mask(src_tensor)
+
+    with torch.no_grad():
+        enc_src = model.encoder(src_tensor, src_mask)
+
+    trg_indexes = [trg_field.vocab.stoi[trg_field.init_token]]
+
+    for i in range(max_len):
+
+        trg_tensor = torch.LongTensor(trg_indexes).unsqueeze(0).to(config.device)
+
+        trg_mask = model.make_trg_mask(trg_tensor)
+
+        with torch.no_grad():
+            output, attention = model.decoder(trg_tensor, enc_src, trg_mask, src_mask)
+
+        pred_token = output.argmax(2)[:, -1].item()
+
+        trg_indexes.append(pred_token)
+
+        if pred_token == trg_field.vocab.stoi[trg_field.eos_token]:
+            break
+
+    trg_tokens = [trg_field.vocab.itos[i] for i in trg_indexes]
+
+    return trg_indexes, trg_tokens[1:], attention
 
 
 def convert_sentence_to_tensor(src, field):

@@ -9,14 +9,14 @@ import spacy
 import wandb
 import revtok
 from experiment import NMTExperiment
-from common import train_nmt, eval_nmt, visualize_transformer_attention, convert_sentence_to_tensor, convert_tensor_to_sentence
+from common import train_nmt, eval_nmt, visualize_transformer_attention, convert_sentence_to_tensor, convert_tensor_to_sentence, translate_sentence, log_to_table
 #from models.NMTModels import Seq2Seq, RNNEncoder, RNNDecoder
 from models.NMTModels import TransformerSeq2Seq, AttnSeq2Seq
 
 parser = argparse.ArgumentParser(description='Neural machine translation')
 # task params
 parser.add_argument('--name', type=str, default=None)
-parser.add_argument('--nepochs', type=int, default=25)
+parser.add_argument('--nepochs', type=int, default=100)
 parser.add_argument('--batch_size', type=int, default=128, help='batch size')
 
 # model params
@@ -25,7 +25,7 @@ parser.add_argument('--model', type=str,
                     default='RNN')
 parser.add_argument('--nhid', type=int, default=256,
                     help='hidden units')
-parser.add_argument('--nhead', type=int, default=2,
+parser.add_argument('--nhead', type=int, default=8,
                     help='attention heads')
 parser.add_argument('--nenc', type=int, default=3,
                     help='number of encoder layers')
@@ -34,24 +34,26 @@ parser.add_argument('--ndec', type=int, default=3,
 parser.add_argument('--logfreq', type=int, default=500,
                     help='frequency to log outputs')
 
-parser.add_argument('--nhenc', type=int, default=2,
+parser.add_argument('--nhenc', type=int, default=8,
                     help='number of encoder attention heads')
-parser.add_argument('--nhdec', type=int, default=2,
+parser.add_argument('--nhdec', type=int, default=8,
                     help='number of decoder attention heads')
-parser.add_argument('--nonlin', type=str, default='tanh',
+parser.add_argument('--nonlin', type=str, default='relu',
                     help='Non linearity, locked to tanh for LSTM')
-parser.add_argument('--demb', type=int, default=1024,
+parser.add_argument('--demb', type=int, default=512,
                     help='embedding vector size')
-parser.add_argument('--dropout', type=float, default=0.2,
+parser.add_argument('--dropout', type=float, default=0.1,
                     help='dropout for embedding layers')
 #optim params/data params
-parser.add_argument('--opt', type=str, default='RMSProp',
+parser.add_argument('--opt', type=str, default='Adam',
                     choices=['SGD', 'RMSProp', 'Adam'])
 parser.add_argument('--lr', type=float, default=0.0005)
 parser.add_argument('--lr_orth', type=float, default=None)
 parser.add_argument('--alpha', type=float, default=None)
-parser.add_argument('--betas', type=float, default=None, nargs="+")
+parser.add_argument('--beta0', type=float, default=0.9)
+parser.add_argument('--beta1', type=float, default=0.999)
 parser.add_argument('--cuda', action='store_true', default=False)
+parser.add_argument('--device', type=int, default=None)
 
 
 
@@ -65,10 +67,12 @@ def run():
         betas=(0.5, 0.999),
         alpha=0.9
     )
+    if args.device is not None:
+        args.device = torch.device(f'cuda:{args.device}')
 
     # wandb
     if args.name is None:
-        run = wandb.init(project="rec-att-project",
+        run = wandb.init(project="gradientsandtranslation2",
                    config=hyper_parameter_defaults)
         wandb.config["more"] = "custom"
         # save run to get readable run name
@@ -78,7 +82,7 @@ def run():
         config.save_dir = os.path.join('experiments', 'NMT', run.name)
         run.save()
     else:
-        run = wandb.init(project="rec-att-project",
+        run = wandb.init(project="gradientsandtranslation",
                    config=hyper_parameter_defaults,
                    name=args.name)
         wandb.config["more"] = "custom"
@@ -155,29 +159,37 @@ def run():
     wandb.watch(model)
     criterion = nn.CrossEntropyLoss(ignore_index=config.TRGPADIDX)
     for i in range(config.nepochs):
+
         train_loss = train_nmt(experiment.model, train_iterator,
                                experiment.optimizer, criterion, config, run,
-                               SRC,TRG)
-        val_loss = eval_nmt(model, valid_iterator, criterion, run, config, SRC, TRG)
+                               SRC, TRG)
+        val_loss = eval_nmt(model, valid_iterator, criterion, config, run, SRC, TRG)
 
-
-        example_idx = 8
-        src = vars(train_data.examples[example_idx])['src']
-        trg = vars(train_data.examples[example_idx])['trg']
-        src_tensor = convert_sentence_to_tensor(src, SRC)
-        trg_tensor = convert_sentence_to_tensor(trg, TRG)
-        with torch.no_grad():
-            output, attention = model.forward(src_tensor.unsqueeze(0),
-                                              trg_tensor.unsqueeze(0))
-        translation = convert_tensor_to_sentence(torch.argmax(output, dim=-1).squeeze(0),
-                                                 TRG)
-        if isinstance(model, TransformerSeq2Seq):
-            visualize_transformer_attention(attention, src, translation)
-        elif isinstance(model, AttnSeq2Seq):
-            # TODO: visualize memnet attention
-            #visualize_memnet_attention(attention, src, translation)
-            pass
-
+        for example_idx in [8]:
+            #example_idx = 8
+            src = vars(train_data.examples[example_idx])['src']
+            trg = vars(train_data.examples[example_idx])['trg']
+            translation_inds, translation, attention = translate_sentence(src, SRC, TRG, spacy_de,
+                                                                          model, config, max_len=50)
+            print(translation)
+            #if isinstance(model, TransformerSeq2Seq):
+            #    visualize_transformer_attention(attention, src, translation)
+            #elif isinstance(model, AttnSeq2Seq):
+            #    # TODO: visualize memnet attention
+                #visualize_memnet_attention(attention, src, translation)
+            #    pass
+            src = [SRC.init_token] + src + [SRC.eos_token]
+            #src_json = [{"sindex": k, 'sword': src[k]} for k in range(len(src))]
+            #translation_json = [{"tindex": k, 'tword': translation[k]} for k in range(len(translation))]
+            #log_to_table(translation, src, trg, run)
+            #wandb.log({"step": i, 'source_sentence': src_json}, commit=False)
+            #wandb.log({"step": i, 'translation': translation_json}, commit=False)
+            attn = attention[0, :, :, :].mean(dim=0).cpu().numpy()
+            attn_data = []
+            for m in range(attn.shape[0]):
+                for n in range(attn.shape[1]):
+                    attn_data.append([n, m, src[n], translation[m], attn[m, n]])
+            wandb.log({"attn_table": wandb.Table(data=attn_data, columns=["s_ind", "t_ind", "s_word", "t_word", "attn"])})
 
         print(f'Epoch: {i} Train Loss: {train_loss} Val Loss {val_loss}')
 

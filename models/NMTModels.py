@@ -261,12 +261,13 @@ class EncoderLayer(nn.Module):
                  hid_size,
                  n_heads,
                  pf_dim,
-                 dropout):
-        super(EncoderLayer,self).__init__()
+                 dropout,
+                 device):
+        super(EncoderLayer, self).__init__()
 
         self.self_attn_layer_norm = nn.LayerNorm(hid_size)
         self.ff_layer_norm = nn.LayerNorm(hid_size)
-        self.self_attention = MultiHeadAttentionLayer(hid_size, n_heads, dropout)
+        self.self_attention = MultiHeadAttentionLayer(hid_size, n_heads, dropout, device)
         self.positionwise_feedforward = PositionwiseFeedforwardLayer(hid_size,
                                                                      pf_dim,
                                                                      dropout)
@@ -282,7 +283,7 @@ class EncoderLayer(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, inp_size, hid_size, n_layers, n_heads, pf_dim, dropout, max_length):
+    def __init__(self, inp_size, hid_size, n_layers, n_heads, pf_dim, dropout, max_length, device):
         super(TransformerEncoder, self).__init__()
 
         self.tok_embedding = nn.Embedding(inp_size, hid_size)
@@ -291,12 +292,16 @@ class TransformerEncoder(nn.Module):
         self.layers = nn.ModuleList([EncoderLayer(hid_size,
                                                   n_heads,
                                                   pf_dim,
-                                                  dropout)
+                                                  dropout,
+                                                  device)
                                      for _ in range(n_layers)])
 
         self.dropout = nn.Dropout(dropout)
+        self.device = device
 
         self.scale = torch.sqrt(torch.FloatTensor([hid_size]))
+        if device is not None:
+            self.scale = self.scale.to(device)
 
     def forward(self, src, src_mask):
         # src = [batch size, src len]
@@ -305,14 +310,12 @@ class TransformerEncoder(nn.Module):
         batch_size = src.shape[0]
         src_len = src.shape[1]
 
-        pos = torch.arange(0, src_len).unsqueeze(0).repeat(batch_size, 1)#.to(self.device)
+        pos = torch.arange(0, src_len).unsqueeze(0).repeat(batch_size, 1).to(self.device)
 
         # pos = [batch size, src len]
-
         src = self.dropout((self.tok_embedding(src) * self.scale) + self.pos_embedding(pos))
 
-        # src = [batch size, src len, hid dim]
-
+        # src = [batch size, src len, hid dim
         for layer in self.layers:
             src = layer(src, src_mask)
 
@@ -321,7 +324,7 @@ class TransformerEncoder(nn.Module):
 
 
 class MultiHeadAttentionLayer(nn.Module):
-    def __init__(self, hid_size, n_heads, dropout):
+    def __init__(self, hid_size, n_heads, dropout, device):
         super(MultiHeadAttentionLayer, self).__init__()
 
         assert hid_size % n_heads == 0
@@ -335,6 +338,8 @@ class MultiHeadAttentionLayer(nn.Module):
         self.fc_o = nn.Linear(hid_size, hid_size)
         self.dropout = nn.Dropout(dropout)
         self.scale = torch.sqrt(torch.FloatTensor([self.head_dim]))
+        if device is not None:
+            self.scale = self.scale.to(device)
 
     def forward(self, query, key, value, mask=None):
         batch_size = query.shape[0]
@@ -383,7 +388,8 @@ class TransformerDecoder(nn.Module):
                  n_heads,
                  pf_dim,
                  dropout,
-                 max_length=100):
+                 max_length=100,
+                 device=None):
         super(TransformerDecoder, self).__init__()
 
         self.tok_embedding = nn.Embedding(output_dim, hid_size)
@@ -392,7 +398,8 @@ class TransformerDecoder(nn.Module):
         self.layers = nn.ModuleList([DecoderLayer(hid_size,
                                                   n_heads,
                                                   pf_dim,
-                                                  dropout)
+                                                  dropout,
+                                                  device)
                                      for _ in range(n_layers)])
 
         self.fc_out = nn.Linear(hid_size, output_dim)
@@ -400,6 +407,9 @@ class TransformerDecoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         self.scale = torch.sqrt(torch.FloatTensor([hid_size]))
+        if device is not None:
+            self.scale = self.scale.to(device)
+        self.device = device
 
     def forward(self, trg, enc_src, trg_mask, src_mask):
         # trg = [batch size, trg len]
@@ -409,6 +419,8 @@ class TransformerDecoder(nn.Module):
         batch_size = trg.shape[0]
         trg_len = trg.shape[1]
         pos = torch.arange(0, trg_len).unsqueeze(0).repeat(batch_size, 1)
+        if self.device is not None:
+            pos = pos.to(self.device)
         # pos = [batch size, trg len]
         trg = self.dropout((self.tok_embedding(trg) * self.scale) + self.pos_embedding(pos))
         # trg = [batch size, trg len, hid dim]
@@ -426,14 +438,15 @@ class DecoderLayer(nn.Module):
                  hid_size,
                  n_heads,
                  pf_dim,
-                 dropout):
+                 dropout,
+                 device):
         super(DecoderLayer, self).__init__()
 
         self.self_attn_layer_norm = nn.LayerNorm(hid_size)
         self.enc_attn_layer_norm = nn.LayerNorm(hid_size)
         self.ff_layer_norm = nn.LayerNorm(hid_size)
-        self.self_attention = MultiHeadAttentionLayer(hid_size, n_heads, dropout)
-        self.encoder_attention = MultiHeadAttentionLayer(hid_size, n_heads, dropout)
+        self.self_attention = MultiHeadAttentionLayer(hid_size, n_heads, dropout, device)
+        self.encoder_attention = MultiHeadAttentionLayer(hid_size, n_heads, dropout, device)
         self.positionwise_feedforward = PositionwiseFeedforwardLayer(hid_size,
                                                                      pf_dim,
                                                                      dropout)
@@ -468,17 +481,21 @@ class TransformerSeq2Seq(nn.Module):
                  encoder,
                  decoder,
                  src_pad_idx,
-                 trg_pad_idx):
+                 trg_pad_idx,
+                 device):
         super(TransformerSeq2Seq, self).__init__()
 
         self.encoder = encoder
         self.decoder = decoder
         self.src_pad_idx = src_pad_idx
         self.trg_pad_idx = trg_pad_idx
+        self.device = device
 
     def make_src_mask(self, src):
         # src = [batch size, src len]
         src_mask = (src != self.src_pad_idx).unsqueeze(1).unsqueeze(2)
+        if self.device is not None:
+            src_mask = src_mask.to(self.device)
         # src_mask = [batch size, 1, 1, src len]
         return src_mask
 
@@ -488,8 +505,11 @@ class TransformerSeq2Seq(nn.Module):
         # trg_pad_mask = [batch size, 1, 1, trg len]
         trg_len = trg.shape[1]
         trg_sub_mask = torch.tril(torch.ones((trg_len, trg_len))).bool()
+        if self.device is not None:
+            trg_sub_mask = trg_sub_mask.to(self.device)
         # trg_sub_mask = [trg len, trg len]
         trg_mask = trg_pad_mask & trg_sub_mask
+
         # trg_mask = [batch size, 1, trg len, trg len]
         return trg_mask
 

@@ -189,21 +189,25 @@ class NMTExperiment(Experiment):
                                            emb_size=config.demb,
                                            enc_hid_size=config.nhid,
                                            dec_hid_size=config.nhid,
-                                           dropout=config.dropout)
+                                           dropout=config.dropout,
+                                           device=config.device)
 
 
             attention = Attention(enc_hid_size=config.nhid,
-                                  dec_hid_size=config.nhid)
+                                  dec_hid_size=config.nhid,
+                                  device=config.device)
 
             decoder = BidirectionalDecoder(out_size=config.out_size,
                                            emb_size=config.demb,
                                            enc_hid_size=config.nhid,
                                            dec_hid_size=config.nhid,
                                            dropout=config.dropout,
-                                           attention=attention)
+                                           attention=attention,
+                                           device=config.device)
 
             model = AttnSeq2Seq(encoder=encoder,
                                 decoder=decoder)
+            model = model.to(config.device)
 
         elif model_name == 'Trans':
             encoder = TransformerEncoder(inp_size=config.inp_size,
@@ -212,7 +216,8 @@ class NMTExperiment(Experiment):
                                          n_heads=config.nhenc,
                                          pf_dim=512,
                                          dropout=config.dropout,
-                                         max_length=100)
+                                         max_length=100,
+                                         device=config.device)
 
             decoder = TransformerDecoder(output_dim=config.out_size,
                                          hid_size=config.nhid,
@@ -220,11 +225,14 @@ class NMTExperiment(Experiment):
                                          n_heads=config.nhdec,
                                          pf_dim=512,
                                          dropout=config.dropout,
-                                         max_length=100)
+                                         max_length=100,
+                                         device=config.device)
             model = TransformerSeq2Seq(encoder=encoder,
                                        decoder=decoder,
                                        src_pad_idx=config.SRCPADIDX,
-                                       trg_pad_idx=config.TRGPADIDX)
+                                       trg_pad_idx=config.TRGPADIDX,
+                                       device=config.device)
+            model = model.to(config.device)
 
         else:
             raise ValueError('Model {} not supported.'.format(model_name))
