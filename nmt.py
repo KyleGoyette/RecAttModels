@@ -9,8 +9,7 @@ import spacy
 import wandb
 import revtok
 from experiment import NMTExperiment
-from common import train_nmt, eval_nmt, visualize_transformer_attention, convert_sentence_to_tensor, convert_tensor_to_sentence, translate_sentence, log_to_table
-#from models.NMTModels import Seq2Seq, RNNEncoder, RNNDecoder
+from common import train_nmt, eval_nmt, convert_sentence_to_tensor, convert_tensor_to_sentence, translate_sentence
 from models.NMTModels import TransformerSeq2Seq, AttnSeq2Seq
 
 parser = argparse.ArgumentParser(description='Neural machine translation')
@@ -153,7 +152,7 @@ def run():
     config.inp_size = len(SRC.vocab)
     config.out_size = len(TRG.vocab)
 
-    # create experiment object
+    # create experiment management object
     experiment = NMTExperiment(config)
     model = experiment.model
     wandb.watch(model)
@@ -164,32 +163,27 @@ def run():
                                experiment.optimizer, criterion, config, run,
                                SRC, TRG)
         val_loss = eval_nmt(model, valid_iterator, criterion, config, run, SRC, TRG)
-
+        # visualize an example
         for example_idx in [8]:
-            #example_idx = 8
             src = vars(train_data.examples[example_idx])['src']
             trg = vars(train_data.examples[example_idx])['trg']
             translation_inds, translation, attention = translate_sentence(src, SRC, TRG, spacy_de,
                                                                           model, config, max_len=50)
-            print(translation)
-            #if isinstance(model, TransformerSeq2Seq):
-            #    visualize_transformer_attention(attention, src, translation)
-            #elif isinstance(model, AttnSeq2Seq):
-            #    # TODO: visualize memnet attention
-                #visualize_memnet_attention(attention, src, translation)
-            #    pass
             src = [SRC.init_token] + src + [SRC.eos_token]
-            #src_json = [{"sindex": k, 'sword': src[k]} for k in range(len(src))]
-            #translation_json = [{"tindex": k, 'tword': translation[k]} for k in range(len(translation))]
-            #log_to_table(translation, src, trg, run)
-            #wandb.log({"step": i, 'source_sentence': src_json}, commit=False)
-            #wandb.log({"step": i, 'translation': translation_json}, commit=False)
             attn = attention[0, :, :, :].mean(dim=0).cpu().numpy()
             attn_data = []
             for m in range(attn.shape[0]):
                 for n in range(attn.shape[1]):
                     attn_data.append([n, m, src[n], translation[m], attn[m, n]])
-            wandb.log({"attn_table": wandb.Table(data=attn_data, columns=["s_ind", "t_ind", "s_word", "t_word", "attn"])})
+            data_table = wandb.Table(data=attn_data, columns=["s_ind", "t_ind", "s_word", "t_word", "attn"])
+            fields = {
+                "sindex": "s_ind",
+                "tindex": "t_ind",
+                "sword": "s_word",
+                "tword": "t_word",
+                "attn": "attn"
+                }
+            wandb.log({"my_nlp_viz_id": wandb.plot_table("kylegoyette/nlp-attention-visualization", data_table, fields)})
 
         print(f'Epoch: {i} Train Loss: {train_loss} Val Loss {val_loss}')
 

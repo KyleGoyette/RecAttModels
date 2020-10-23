@@ -141,7 +141,6 @@ def train_nmt(model, iterator, optimizer, criterion, config, run=None,
             output = output[1:].view(-1, output.shape[-1])
             trg = trg[1:].contiguous().view(-1)
         loss = criterion(output, trg)
-        #print(loss.item())
         loss.backward()
 
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
@@ -149,19 +148,6 @@ def train_nmt(model, iterator, optimizer, criterion, config, run=None,
         if run is not None:
             run.log({'train loss': loss.item()})
         losses.append(loss.item())
-        """
-        if i % config.logfreq == 0 and run is not None:
-            if isinstance(model, TransformerSeq2Seq):
-                log_to_table(output, src, trg.view(src.shape[0], -1),
-                             src_field, trg_field, run, 'Train')
-
-            else:
-                print(src.shape, trg.shape)
-                log_to_table(output,
-                             src.transpose(1, 0),
-                             trg.view(-1, src.shape[1]).t(),
-                             src_field, trg_field, run, 'Train')
-        """
     run.log({'epoch train loss': np.mean(losses)})
     return np.mean(losses)
 
@@ -190,16 +176,6 @@ def eval_nmt(model, iterator, criterion, config, run=None,
             if run is not None:
                 run.log({'valid loss': loss.item()})
             losses.append(loss.item())
-            """
-            if i % config.logfreq and run is not None:
-                if isinstance(model, TransformerSeq2Seq):
-                    log_to_table(output, src, trg.view(src.shape[0],-1),
-                                 src_field, trg_field, run, 'Val')
-                else:
-                    log_to_table(output, src.transpose(1, 0),
-                                 trg.view(-1, src.shape[1]).t(),
-                                 src_field, trg_field, run, 'Val')
-            """
     run.log({'epoch valid loss': np.mean(losses)})
     return np.mean(losses)
 

@@ -3,7 +3,6 @@ import torch.nn as nn
 from common import onehot
 import numpy as np
 from common import modrelu
-from models.expRNN.expm32 import expm32
 from models.SAB import SAB_LSTM
 
 def henaff_init(n):
@@ -93,10 +92,6 @@ class MemRNN(nn.Module):
         self.v = nn.Parameter(torch.Tensor(1, hidden_size, 1))
 
         nn.init.xavier_normal_(self.v.data)
-        #self.V.weight.data = torch.as_tensor(henaff_init(hidden_size))
-        #A = self.V.weight.data.triu(diagonal=1)
-        #A = A - A.t()
-        #self.V.weight.data = expm32(A)
         self.es = []
         self.alphas = []
 

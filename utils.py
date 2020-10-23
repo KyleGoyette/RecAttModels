@@ -1,7 +1,5 @@
 import torch
 import numpy as np
-import altair as alt
-import altair_viewer
 import json
 from scipy.special import softmax
 import pandas as pd

@@ -5,7 +5,6 @@ import argparse
 import time
 import os
 import plotly.graph_objects as go
-from grad_vis import grad_attention_viz_name, grad_attention_viz
 import numpy as np
 from experiment import Experiment
 from common import construct_heatmap_data, onehot
@@ -74,6 +73,32 @@ parser.add_argument('--loghmvid', action='store_true', default=False,
 parser.add_argument('--loggrads', type=int, default=500,
                     help='frequency to log grads')
 
+def make_grad_attn_viz(grads, attention, threshold=0.005):
+    """
+    Plots gradients, shows
+    :param grads: list of gradient values length T
+    :param attention: TxT matrix of attention weights
+    :return:
+    """
+    data = []
+    T = attention.shape[0]
+
+    for i in range(T):
+        for j in range(T):
+            data.append([i,j, grads[j], attention[i,j]])
+    data_table = wandb.Table(data=data, columns= ['source_step', 'target_step', 'grad', 'attn'])
+    fields_map = {
+        "source step": "source_step",
+        "target step": "target_step",
+        "grad": "grad",
+        "attn": "attn"
+    }
+    return wandb.plot_table(
+        vega_spec_name="kylegoyette/loss-gradient-attention-propagation", 
+        data_table=data_table, 
+        fields=fields_map
+        )
+
 
 
 def run():
@@ -95,9 +120,10 @@ def run():
     )
     # create save_dir using wandb name
     if args.name is None:
-        run = wandb.init(project="test-project",
+        run = wandb.init(project="gradientsandtranslation",
                          config=hyper_parameter_defaults,
-                         group=args.group)
+                         group=args.group,
+                         entity="kylegoyette")
         wandb.config["more"] = "custom"
         # save run to get readable run name
         run.save()
@@ -106,10 +132,11 @@ def run():
         config.save_dir = os.path.join('experiments', args.task, run.name)
         run.save()
     else:
-        run = wandb.init(project="test-project",
+        run = wandb.init(project="gradientsandtranslation",
                          config=hyper_parameter_defaults,
                          name=args.name,
-                         group=args.group)
+                         group=args.group,
+                         entity="kylegoyette")
         #wandb.config["more"] = "custom"
         run.name = os.path.join(args.task, run.name)
         config = wandb.config
@@ -195,8 +222,7 @@ def run():
 
         # log heat maps for attention models
         if i % config.loghm == 0 and config.model in ['MemRNN', 'SAB']:
-            hm = construct_heatmap_data(model.alphas).cpu().clone()
-            #fig1 = xp.imshow(1-hm, color_continuous_scale=px.colors.sequential.Greys)
+            hm = attn = construct_heatmap_data(model.alphas).cpu().clone()
 
             fig_hm = go.Figure(go.Heatmap(z=hm,
                                           x=list(range(hm.shape[1])),
@@ -206,9 +232,6 @@ def run():
                                  xaxis_title="Attention step",
                                  yaxis_title="timestep")
             wandb.log({'heat map': fig_hm}, step=i)
-            #wandb.log({'heat map': wandb.plots.HeatMap(x_labels = range(len(model.rnn.alphas)),
-            #                                           y_labels = range(len(model.rnn.alphas)),
-            #                                           matrix_values=hm)})
             if config.loghmvid:
                 hms.append(hm)
 
@@ -248,9 +271,7 @@ def run():
             fig.show()
             wandb.log({'grads': fig}, step=i)
             if i % config.loggrads == 0 and i% config.loghm == 0:
-                wandb.log({f"Gradient/Attention Visualization Bar_{i}": grad_attention_viz(grads, hm)})
-                #wandb.log(
-                #    {f"Gradient/Attention Visualization Line_{i}": grad_attention_viz_name(grads, hm, 'wandb/grad_line_plot/v1')})
+                wandb.log({f"Gradient/Attention Visualization": make_grad_attn_viz(grads, attn)})
 
         print('Update {}, Time for Update: {} , Average Loss: {}, Accuracy: {}'
               .format(i + 1, time.time() - s_t, all_loss.item(), acc))
